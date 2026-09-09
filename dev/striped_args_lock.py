@@ -12,36 +12,24 @@ helpers = r'''const _ARGUMENT_CACHE_LOCKS = ntuple(_ -> ReentrantLock(), 64)
     return @inbounds _ARGUMENT_CACHE_LOCKS[idx]
 end
 
-function _materialize_addmul_arguments!(
-    args::ArgsT{T}, coeff, dict, variant, shape, type
-) where {T}
+@inline function _argument_cache_ready(args::ArgsT)
     lk = _argument_cache_lock(args)
     lock(lk)
     try
-        isempty(args) || return args
-        @match variant begin
-            AddMulVariant.ADD => begin
-                if !iszero(coeff)
-                    push!(args, Const{T}(coeff))
-                end
-                for (k, v) in dict
-                    newterm = @match k begin
-                        BSImpl.AddMul(; dict = d2, variant = v2, type, shape, metadata) && if v2 == AddMulVariant.MUL end => begin
-                            Mul{T}(v, d2; shape, type, metadata)
-                        end
-                        _ => Mul{T}(v, ACDict{T}(k => 1); shape, type)
-                    end
-                    push!(args, newterm)
-                end
-            end
-            AddMulVariant.MUL => begin
-                if !_isone(coeff)
-                    push!(args, Const{T}(coeff))
-                end
-                for (k, v) in dict
-                    push!(args, k ^ v)
-                end
-            end
+        return !isempty(args)
+    finally
+        unlock(lk)
+    end
+end
+
+@inline function _publish_argument_cache!(args::ArgsT{T}, candidate::ArgsT{T}) where {T}
+    lk = _argument_cache_lock(args)
+    lock(lk)
+    try
+        if isempty(args)
+            # Preserve the existing `args` object and its public/internal field type.
+            # Only replace its private backing after the candidate is complete.
+            args.data = candidate.data
         end
         return args
     finally
@@ -49,35 +37,60 @@ function _materialize_addmul_arguments!(
     end
 end
 
+function _materialize_addmul_arguments!(
+    args::ArgsT{T}, coeff, dict, variant, shape, type
+) where {T}
+    _argument_cache_ready(args) && return args
+
+    candidate = ArgsT{T}()
+    @match variant begin
+        AddMulVariant.ADD => begin
+            if !iszero(coeff)
+                push!(candidate, Const{T}(coeff))
+            end
+            for (k, v) in dict
+                newterm = @match k begin
+                    BSImpl.AddMul(; dict = d2, variant = v2, type, shape, metadata) && if v2 == AddMulVariant.MUL end => begin
+                        Mul{T}(v, d2; shape, type, metadata)
+                    end
+                    _ => Mul{T}(v, ACDict{T}(k => 1); shape, type)
+                end
+                push!(candidate, newterm)
+            end
+        end
+        AddMulVariant.MUL => begin
+            if !_isone(coeff)
+                push!(candidate, Const{T}(coeff))
+            end
+            for (k, v) in dict
+                push!(candidate, k ^ v)
+            end
+        end
+    end
+    return _publish_argument_cache!(args, candidate)
+end
+
 function _materialize_arrayop_arguments!(
     args::ArgsT{T}, output_idx, expr, reduce, term, ranges
 ) where {T}
-    lk = _argument_cache_lock(args)
-    lock(lk)
-    try
-        isempty(args) || return args
-        push!(args, Const{T}(output_idx))
-        push!(args, Const{T}(expr))
-        push!(args, Const{T}(reduce))
-        push!(args, Const{T}(term))
-        push!(args, Const{T}(ranges))
-        return args
-    finally
-        unlock(lk)
-    end
+    _argument_cache_ready(args) && return args
+
+    candidate = ArgsT{T}()
+    push!(candidate, Const{T}(output_idx))
+    push!(candidate, Const{T}(expr))
+    push!(candidate, Const{T}(reduce))
+    push!(candidate, Const{T}(term))
+    push!(candidate, Const{T}(ranges))
+    return _publish_argument_cache!(args, candidate)
 end
 
 function _materialize_arraymaker_arguments!(args::ArgsT{T}, regions, values) where {T}
-    lk = _argument_cache_lock(args)
-    lock(lk)
-    try
-        isempty(args) || return args
-        push!(args, BSImpl.Const{T}(regions))
-        push!(args, BSImpl.Const{T}(values))
-        return args
-    finally
-        unlock(lk)
-    end
+    _argument_cache_ready(args) && return args
+
+    candidate = ArgsT{T}()
+    push!(candidate, BSImpl.Const{T}(regions))
+    push!(candidate, BSImpl.Const{T}(values))
+    return _publish_argument_cache!(args, candidate)
 end
 
 '''
