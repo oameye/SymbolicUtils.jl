@@ -38,36 +38,38 @@ function bench_warm(; calls = 1_000_000)
     return 1e9 * t / calls, alloc
 end
 
-function prepare_cold(batch, nargs)
-    [fresh_expr(Symbol(:cold_, i); nargs) for i in 1:batch]
+function prepare_cold(prefix, batch, nargs)
+    [fresh_expr(Symbol(prefix, :_, i); nargs) for i in 1:batch]
 end
 
 function bench_cold(; batch = 1000, nargs = 32)
     times = Float64[]
     allocs = Int[]
     for rep in 1:7
-        exprs = prepare_cold(batch, nargs)
+        exprs = prepare_cold(Symbol(:cold_time_, rep), batch, nargs)
         GC.gc()
         push!(times, @elapsed foreach(arguments, exprs))
-        exprs2 = prepare_cold(batch, nargs)
-        push!(allocs, @allocated foreach(arguments, exprs2))
+
+        exprs_alloc = prepare_cold(Symbol(:cold_alloc_, rep), batch, nargs)
+        push!(allocs, @allocated foreach(arguments, exprs_alloc))
     end
     return 1e6 * median(times) / batch, median(allocs) / batch
 end
 
-function prepare_groups(batch, nargs)
-    [syms_for(Symbol(:construct_, b), nargs) for b in 1:batch]
+function prepare_groups(prefix, batch, nargs)
+    [syms_for(Symbol(prefix, :_, b), nargs) for b in 1:batch]
 end
 
 function bench_construct(; batch = 1000, nargs = 32)
     times = Float64[]
     allocs = Int[]
-    for _ in 1:7
-        groups = prepare_groups(batch, nargs)
+    for rep in 1:7
+        groups = prepare_groups(Symbol(:construct_time_, rep), batch, nargs)
         GC.gc()
         push!(times, @elapsed map(sum, groups))
-        groups2 = prepare_groups(batch, nargs)
-        push!(allocs, @allocated map(sum, groups2))
+
+        groups_alloc = prepare_groups(Symbol(:construct_alloc_, rep), batch, nargs)
+        push!(allocs, @allocated map(sum, groups_alloc))
     end
     return 1e6 * median(times) / batch, median(allocs) / batch
 end
