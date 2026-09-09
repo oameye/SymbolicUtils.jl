@@ -1,0 +1,135 @@
+name: Investigate related threading issues
+
+on:
+  push:
+    branches:
+      - investigate/related-threading-issues
+
+jobs:
+  issue-696:
+    name: "#696 (${{ matrix.target }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: baseline
+            ref: b3c7b36c85ed2b1691bddc3c2d1ca36413ca984e
+          - target: fix
+            ref: cd183ac417986e9403a381500aab2553431a5a39
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Run hash-consing/substitution race
+        run: |
+          cat > /tmp/repro696.jl <<'JULIA'
+          using SymbolicUtils
+          using SymbolicUtils: SymReal
+          using Base.Threads
+
+          @assert nthreads() > 1
+
+          function trial(k; nargs = 1024, ntasks = max(8, 4nthreads()))
+              ready = Atomic{Int}(0)
+              go = Atomic{Bool}(false)
+              tasks = [
+                  @spawn begin
+                      # Equal independently-built expressions are hash-consed to a shared node.
+                      xs = [
+                          SymbolicUtils.Sym{SymReal}(Symbol("issue696_$(k)_$(i)"); type = Real)
+                          for i in 1:nargs
+                      ]
+                      expr = sum(xs)
+                      atomic_add!(ready, 1)
+                      while !go[]
+                          yield()
+                      end
+                      substitute(expr, Dict(xs[1] => 1))
+                  end for _ in 1:ntasks
+              ]
+              while ready[] < ntasks
+                  yield()
+              end
+              go[] = true
+              fetch.(tasks)
+              return nothing
+          end
+
+          for k in 1:100
+              trial(k)
+          end
+          JULIA
+          julia --project=. --threads=8 /tmp/repro696.jl
+
+  issue-856:
+    name: "#856 (${{ matrix.target }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: baseline
+            ref: b3c7b36c85ed2b1691bddc3c2d1ca36413ca984e
+          - target: fix
+            ref: cd183ac417986e9403a381500aab2553431a5a39
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - name: Run exact threaded simplify reproducer
+        run: |
+          cat > /tmp/repro856.jl <<'JULIA'
+          using SymbolicUtils, Symbolics
+
+          @variables Ω[1:2] Ca[1:2] CO3[1:2] T[1:2] sal_val pressure aspₐ bsp csp dsp atmtoPa rsp
+          eq = Ω[2] ~ (Ca[2]*CO3[2]*exp((-atmtoPa*(aspₐ - bsp*(T[2]))*pressure + (atmtoPa^2)*(csp - dsp*(T[2]))*(pressure^2)) / (rsp*(T[2])))) / (1.5exp(316.9463 + sqrt(sal_val)*(1.6233 + -118.64 / (T[2])) - 0.06999sal_val - 48.7537log((T[2])) + -13348.09 / (T[2])))
+
+          # Repeat to distinguish a race from a one-off scheduler outcome.
+          for _ in 1:100
+              SymbolicUtils.simplify(eq; expand = false, threaded = true)
+          end
+          JULIA
+          julia --threads=8 -e 'using Pkg; env=mktempdir(); Pkg.activate(env); Pkg.develop(path=pwd()); Pkg.add("Symbolics"); include("/tmp/repro856.jl")'
+
+  issue-408:
+    name: "#408 (${{ matrix.target }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: baseline
+            ref: b3c7b36c85ed2b1691bddc3c2d1ca36413ca984e
+          - target: fix
+            ref: cd183ac417986e9403a381500aab2553431a5a39
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Run simplify_fractions threading reproducer
+        run: |
+          cat > /tmp/repro408.jl <<'JULIA'
+          using SymbolicUtils
+          using Base.Threads
+
+          @syms a b
+          expr = ((a + b + (a - b) / a) / a)^10
+          for _ in 1:1000
+              Threads.@threads for _ in 1:10
+                  simplify_fractions(expand(expr))
+              end
+          end
+          JULIA
+          julia --project=. --threads=8 /tmp/repro408.jl
