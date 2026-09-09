@@ -1,0 +1,19 @@
+name: Repro AddMul arguments race
+
+on:
+  push:
+    branches:
+      - repro/addmul-arguments-race
+
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Run reproducer
+        run: julia --project=. --threads=8 repro_addmul_arguments_race.jl
