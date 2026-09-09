@@ -5,7 +5,7 @@ text = path.read_text()
 
 marker = '"""\n    arguments(expr)\n'
 assert text.count(marker) == 1
-helpers = r'''const _ARGUMENT_CACHE_LOCKS = ntuple(_ -> ReentrantLock(), 64)
+helpers = r'''const _ARGUMENT_CACHE_LOCKS = ntuple(_ -> Threads.SpinLock(), 64)
 
 @inline function _argument_cache_lock(args::ArgsT)
     idx = Int(mod(objectid(args), UInt(length(_ARGUMENT_CACHE_LOCKS)))) + 1
