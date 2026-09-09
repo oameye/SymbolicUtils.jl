@@ -1,0 +1,104 @@
+using SymbolicUtils
+using SymbolicUtils: SymReal
+using TermInterface
+using Base.Threads
+using Statistics
+
+function syms_for(tag, n)
+    [SymbolicUtils.Sym{SymReal}(Symbol(tag, :_, i); type = Real) for i in 1:n]
+end
+
+function fresh_expr(tag; nargs = 32)
+    xs = syms_for(tag, nargs)
+    return sum(xs)
+end
+
+function median_elapsed(f; reps = 7)
+    vals = Float64[]
+    for _ in 1:reps
+        GC.gc()
+        push!(vals, @elapsed f())
+    end
+    return median(vals)
+end
+
+function bench_warm(; calls = 1_000_000)
+    expr = fresh_expr(:warm; nargs = 32)
+    arguments(expr)
+    t = median_elapsed(; reps = 9) do
+        for _ in 1:calls
+            arguments(expr)
+        end
+    end
+    alloc = @allocated begin
+        for _ in 1:calls
+            arguments(expr)
+        end
+    end
+    return 1e9 * t / calls, alloc
+end
+
+function prepare_cold(batch, nargs)
+    [fresh_expr(Symbol(:cold_, i); nargs) for i in 1:batch]
+end
+
+function bench_cold(; batch = 1000, nargs = 32)
+    times = Float64[]
+    allocs = Int[]
+    for rep in 1:7
+        exprs = prepare_cold(batch, nargs)
+        GC.gc()
+        push!(times, @elapsed foreach(arguments, exprs))
+        exprs2 = prepare_cold(batch, nargs)
+        push!(allocs, @allocated foreach(arguments, exprs2))
+    end
+    return 1e6 * median(times) / batch, median(allocs) / batch
+end
+
+function prepare_groups(batch, nargs)
+    [syms_for(Symbol(:construct_, b), nargs) for b in 1:batch]
+end
+
+function bench_construct(; batch = 1000, nargs = 32)
+    times = Float64[]
+    allocs = Int[]
+    for _ in 1:7
+        groups = prepare_groups(batch, nargs)
+        GC.gc()
+        push!(times, @elapsed map(sum, groups))
+        groups2 = prepare_groups(batch, nargs)
+        push!(allocs, @allocated map(sum, groups2))
+    end
+    return 1e6 * median(times) / batch, median(allocs) / batch
+end
+
+function stress(; trials = 50, nargs = 1024, ntasks = max(8, 4nthreads()))
+    for trial in 1:trials
+        expr = fresh_expr(Symbol(:stress_, trial); nargs)
+        ready = Atomic{Int}(0)
+        go = Atomic{Bool}(false)
+        tasks = [
+            @spawn begin
+                atomic_add!(ready, 1)
+                while !go[]
+                    yield()
+                end
+                arguments(expr)
+            end for _ in 1:ntasks
+        ]
+        while ready[] < ntasks
+            yield()
+        end
+        go[] = true
+        results = fetch.(tasks)
+        first_parent = parent(first(results))
+        @assert all(a -> parent(a) === first_parent, results)
+    end
+    return true
+end
+
+println("threads=", nthreads())
+println("warm_ns_per_call, warm_alloc_bytes=", bench_warm())
+println("cold_us_per_expr, cold_alloc_bytes_per_expr=", bench_cold())
+println("construct_us_per_expr, construct_alloc_bytes_per_expr=", bench_construct())
+println("stress=", stress())
