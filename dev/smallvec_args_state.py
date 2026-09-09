@@ -1,9 +1,5 @@
 from pathlib import Path
 
-EMPTY = "_ARGUMENT_CACHE_EMPTY"
-PUBLISHING = "_ARGUMENT_CACHE_PUBLISHING"
-READY = "_ARGUMENT_CACHE_READY"
-
 small = Path("src/small_array.jl")
 text = small.read_text()
 old = '''mutable struct SmallVec{T, V <: AbstractVector{T}} <: AbstractVector{T}\n    data::Union{Backing{T}, V}\n'''
@@ -11,12 +7,10 @@ new = '''mutable struct SmallVec{T, V <: AbstractVector{T}} <: AbstractVector{T}
 assert text.count(old) == 1
 text = text.replace(old, new)
 
-# Every inner constructor initializes the inline publication byte to zero.
 repls = [
     ('new{T, V}(Backing{T}(x...))', 'new{T, V}(Backing{T}(x...), UInt8(0))'),
     ('new{T, V}(x)', 'new{T, V}(x, UInt8(0))'),
     ('new{T, V}(Backing{T}())', 'new{T, V}(Backing{T}(), UInt8(0))'),
-    ('new{T, V}(Backing{T}(x...))', 'new{T, V}(Backing{T}(x...), UInt8(0))'),
     ('new{T, V}(V(x isa Tuple ? collect(x) : x))', 'new{T, V}(V(x isa Tuple ? collect(x) : x), UInt8(0))'),
     ('return new{T, V}(inner)', 'return new{T, V}(inner, UInt8(0))'),
 ]
@@ -42,8 +36,6 @@ const _ARGUMENT_CACHE_READY = UInt8(2)
         end
         return true
     end
-    # Preserve low-level callers that explicitly construct a cache-bearing node
-    # with a pre-populated `args` vector.
     if !isempty(args)
         @atomic :release args.publication_state = _ARGUMENT_CACHE_READY
         return true
@@ -52,8 +44,7 @@ const _ARGUMENT_CACHE_READY = UInt8(2)
 end
 
 @inline function _publish_argument_cache!(args::ArgsT{T}, candidate::ArgsT{T}) where {T}
-    result = @atomicreplace :acquire_release :acquire args.publication_state \
-        _ARGUMENT_CACHE_EMPTY => _ARGUMENT_CACHE_PUBLISHING
+    result = @atomicreplace :acquire_release :acquire args.publication_state _ARGUMENT_CACHE_EMPTY => _ARGUMENT_CACHE_PUBLISHING
     if result.success
         args.data = candidate.data
         @atomic :release args.publication_state = _ARGUMENT_CACHE_READY
