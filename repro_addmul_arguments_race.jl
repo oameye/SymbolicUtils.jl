@@ -2,7 +2,7 @@ using SymbolicUtils
 using Base.Threads
 
 function one_trial(trial; nargs = 4096, ntasks = max(8, 4 * nthreads()))
-    xs = [SymbolicUtils.Sym{Real}(Symbol(:x_, trial, :_, i)) for i in 1:nargs]
+    xs = [SymbolicUtils.Sym{SymbolicUtils.SymReal}(Symbol(:x_, trial, :_, i); type = Real) for i in 1:nargs]
     expr = sum(xs)
 
     ready = Atomic{Int}(0)
