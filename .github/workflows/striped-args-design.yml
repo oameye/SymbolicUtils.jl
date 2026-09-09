@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: striped-args-design
+  cancel-in-progress: true
+
 jobs:
   compare:
     runs-on: ubuntu-latest
@@ -45,19 +49,23 @@ jobs:
           git diff -- src/terminterface.jl
           test -z "$(git diff --name-only -- src/types.jl src/small_array.jl)"
 
-      - name: Instantiate variants
-        run: |
-          julia --project=master -e 'using Pkg; Pkg.instantiate()'
-          julia --project=wrapper -e 'using Pkg; Pkg.instantiate()'
-          julia --project=lock -e 'using Pkg; Pkg.instantiate()'
+      - name: Instantiate dependencies once
+        run: julia --project=master -e 'using Pkg; Pkg.instantiate()'
 
-      - name: Load prototype and verify direct args surface
+      - name: Load all three variants
+        run: |
+          julia --project=master -e 'using SymbolicUtils'
+          julia --project=wrapper -e 'using SymbolicUtils'
+          julia --project=lock -e 'using SymbolicUtils'
+
+      - name: Verify direct args surface
         working-directory: lock
         run: |
           julia --project=. -e '
             using SymbolicUtils
             using SymbolicUtils: SymReal, BSImpl, ArgsT
             using Moshi.Match: @match
+            using TermInterface
             xs = [SymbolicUtils.Sym{SymReal}(Symbol(:x_, i); type=Real) for i in 1:8]
             ex = sum(xs)
             raw = @match ex begin
@@ -66,21 +74,21 @@ jobs:
             end
             @assert raw isa ArgsT{SymReal}
             @assert isempty(raw)
-            TermInterface.arguments(ex)
+            arguments(ex)
             @assert !isempty(raw)
             @assert raw isa ArgsT{SymReal}
             println("direct args surface preserved: ", typeof(raw))
           '
 
-      - name: Targeted threaded stress - baseline expected to fail
-        continue-on-error: true
-        run: julia --project=master --threads=8 lock/dev/bench_args_cache.jl
-
-      - name: Targeted threaded stress and microbench - atomic wrapper
+      - name: Microbench and stress - atomic wrapper
         run: julia --project=wrapper --threads=8 lock/dev/bench_args_cache.jl
 
-      - name: Targeted threaded stress and microbench - striped lock
+      - name: Microbench and stress - striped lock
         run: julia --project=lock --threads=8 lock/dev/bench_args_cache.jl
+
+      - name: Baseline race check
+        continue-on-error: true
+        run: julia --project=master --threads=8 lock/dev/bench_args_cache.jl
 
       - name: Full prototype tests
         working-directory: lock
