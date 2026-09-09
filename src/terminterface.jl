@@ -135,6 +135,15 @@ function __sorted_args(x::BasicSymbolic{T})::ROArgsT{T} where {T}
     end
 end
 
+@inline function _get_cached_arguments(cache::ArgsCacheT{T}) where {T}
+    return @atomic :acquire cache.value
+end
+
+@inline function _publish_cached_arguments!(cache::ArgsCacheT{T}, candidate::ArgsT{T}) where {T}
+    result = @atomicreplace :acquire_release :acquire cache.value nothing => candidate
+    return result.success ? candidate : result.old::ArgsT{T}
+end
+
 """
     arguments(expr)
 
@@ -169,15 +178,6 @@ arguments(arguments(expr4)[1])  # returns collection containing x and y
 
 See also: [`iscall`](@ref), [`operation`](@ref)
 """
-@inline function _get_cached_arguments(cache::ArgsCacheT{T}) where {T}
-    return @atomic :acquire cache.value
-end
-
-@inline function _publish_cached_arguments!(cache::ArgsCacheT{T}, candidate::ArgsT{T}) where {T}
-    result = @atomicreplace :acquire_release :acquire cache.value nothing => candidate
-    return result.success ? candidate : result.old::ArgsT{T}
-end
-
 function TermInterface.arguments(x::BSImpl.Type{T})::ROArgsT{T} where {T}
     @match x begin
         BSImpl.Const(_) => throw(ArgumentError("`Const` does not have arguments."))

@@ -9,11 +9,11 @@ function fresh_sum(trial; nargs = 1024)
         SymbolicUtils.Sym{SymReal}(Symbol(:threadsafe_args_, trial, :_, i); type = Real)
         for i in 1:nargs
     ]
-    return sum(xs)
+    return sum(xs), xs
 end
 
 @testset "lazy arguments cache publication" begin
-    expr = fresh_sum(0; nargs = 32)
+    expr, _ = fresh_sum(0; nargs = 32)
     first_args = arguments(expr)
     second_args = arguments(expr)
     @test isequal(collect(first_args), collect(second_args))
@@ -32,8 +32,8 @@ end
     else
         @test nthreads() > 1
         for trial in 1:25
-            expr = fresh_sum(trial)
-            expected = Set(keys(expr.dict))
+            expr, xs = fresh_sum(trial)
+            expected = Set(xs)
             ready = Atomic{Int}(0)
             go = Atomic{Bool}(false)
             ntasks = max(8, 4 * nthreads())
@@ -43,7 +43,7 @@ end
                     while !go[]
                         yield()
                     end
-                    collect(arguments(expr))
+                    arguments(expr)
                 end for _ in 1:ntasks
             ]
             while ready[] < ntasks
@@ -51,6 +51,8 @@ end
             end
             go[] = true
             results = fetch.(tasks)
+            published = parent(first(results))
+            @test all(args -> parent(args) === published, results)
             @test all(length(args) == length(expected) for args in results)
             @test all(isequal(Set(args), expected) for args in results)
         end
