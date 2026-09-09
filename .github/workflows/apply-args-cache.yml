@@ -1,0 +1,39 @@
+name: Validate atomic argument cache implementation
+
+on:
+  push:
+    branches:
+      - fix/threadsafe-arguments-cache
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: ${{ !contains(github.event.head_commit.message, 'fix: publish lazy argument caches atomically') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+      - name: Apply source transformation
+        run: python dev_apply_args_cache.py
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Load package
+        run: julia --project=. -e 'using SymbolicUtils; println("SymbolicUtils loaded")'
+      - name: Run threaded regression
+        run: julia --project=. --threads=8 test/threadsafe_arguments.jl
+      - name: Commit validated implementation
+        run: |
+          rm -f atomic_moshi_probe.jl dev_apply_args_cache.py
+          rm -f .github/workflows/atomic-moshi-probe.yml .github/workflows/apply-args-cache.yml
+          git config user.name "Orjan Ameye"
+          git config user.email "orjan.ameye@hotmail.com"
+          git add src/types.jl src/terminterface.jl test/runtests.jl test/threadsafe_arguments.jl
+          git add -u atomic_moshi_probe.jl dev_apply_args_cache.py .github/workflows/atomic-moshi-probe.yml .github/workflows/apply-args-cache.yml
+          git commit -m "fix: publish lazy argument caches atomically"
+          git push origin HEAD:fix/threadsafe-arguments-cache
