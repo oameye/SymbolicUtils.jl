@@ -1,0 +1,22 @@
+name: Atomic Moshi probe
+
+on:
+  push:
+    branches:
+      - fix/threadsafe-arguments-cache
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        julia-version: ['1.10', '1.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Probe atomic field
+        run: julia --project=. atomic_moshi_probe.jl
