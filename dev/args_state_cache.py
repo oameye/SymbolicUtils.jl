@@ -10,16 +10,7 @@ anchor = 'const SmallV{T} = SmallVec{T, Vector{T}}\n'
 assert text.count(anchor) == 1
 text = text.replace(anchor, anchor + '''\nconst _ARGUMENT_CACHE_EMPTY = UInt8(0)\nconst _ARGUMENT_CACHE_PUBLISHING = UInt8(1)\nconst _ARGUMENT_CACHE_READY = UInt8(2)\nconst ArgumentCacheState = Threads.Atomic{UInt8}\n@inline _new_argument_cache_state() = ArgumentCacheState(_ARGUMENT_CACHE_EMPTY)\n''')
 
-field = '        const args::SmallV{BasicSymbolicImpl.Type{T}}\n'
-assert text.count(field) == 4  # Term plus the three lazy-cache variants
-# Leave Term unchanged; add state only to AddMul, ArrayOp, ArrayMaker using surrounding anchors.
-for preceding in [
-    '        const variant::AddMulVariant.T\n        const metadata::MetadataT\n        const shape::ShapeT\n        const type::TypeT\n',
-    '        const metadata::MetadataT\n        const shape::ShapeT\n        const type::TypeT\n',
-]:
-    pass
-
-# Exact variant-local replacements.
+# Add a private state field only to the three lazy-cache variants.
 old = '''        const variant::AddMulVariant.T\n        const metadata::MetadataT\n        const shape::ShapeT\n        const type::TypeT\n        const args::SmallV{BasicSymbolicImpl.Type{T}}\n        hash::UInt\n'''
 new = '''        const variant::AddMulVariant.T\n        const metadata::MetadataT\n        const shape::ShapeT\n        const type::TypeT\n        const args::SmallV{BasicSymbolicImpl.Type{T}}\n        const args_state::ArgumentCacheState\n        hash::UInt\n'''
 assert text.count(old) == 1
@@ -35,24 +26,31 @@ new = '''        const shape::ShapeT\n        const type::TypeT\n        const a
 assert text.count(old) == 1
 text = text.replace(old, new)
 
-repls = {
-'''ordered_override_properties(::Type{BSImpl.AddMul{T}}) where {T} = (ArgsT{T}(), 0, 0, nothing)\n''':
-'''ordered_override_properties(::Type{BSImpl.AddMul{T}}) where {T} = (ArgsT{T}(), _new_argument_cache_state(), 0, 0, nothing)\n''',
-'''ordered_override_properties(::Type{<:BSImpl.ArrayOp{T}}) where {T} = (ArgsT{T}(), 0, 0, nothing)\n''':
-'''ordered_override_properties(::Type{<:BSImpl.ArrayOp{T}}) where {T} = (ArgsT{T}(), _new_argument_cache_state(), 0, 0, nothing)\n''',
-'''ordered_override_properties(::Type{<:BSImpl.ArrayMaker{T}}) where {T} = (ArgsT{T}(), 0, 0, nothing)\n''':
-'''ordered_override_properties(::Type{<:BSImpl.ArrayMaker{T}}) where {T} = (ArgsT{T}(), _new_argument_cache_state(), 0, 0, nothing)\n''',
-'''                             ArgsT{T}(), Z, Z, nothing)\n''':
-'''                             ArgsT{T}(), _new_argument_cache_state(), Z, Z, nothing)\n''',
-'''                              ArgsT{T}(), Z, Z, nothing)\n''':
-'''                              ArgsT{T}(), _new_argument_cache_state(), Z, Z, nothing)\n''',
-'''                                 get(p, :type, type), ArgsT{T}(), Z, Z, nothing)\n''':
-'''                                 get(p, :type, type), ArgsT{T}(), _new_argument_cache_state(), Z, Z, nothing)\n''',
-}
-for old, new in repls.items():
-    count = text.count(old)
-    assert count >= 1, old
+for old, new in [
+    ('ordered_override_properties(::Type{BSImpl.AddMul{T}}) where {T} = (ArgsT{T}(), 0, 0, nothing)\n',
+     'ordered_override_properties(::Type{BSImpl.AddMul{T}}) where {T} = (ArgsT{T}(), _new_argument_cache_state(), 0, 0, nothing)\n'),
+    ('ordered_override_properties(::Type{<:BSImpl.ArrayOp{T}}) where {T} = (ArgsT{T}(), 0, 0, nothing)\n',
+     'ordered_override_properties(::Type{<:BSImpl.ArrayOp{T}}) where {T} = (ArgsT{T}(), _new_argument_cache_state(), 0, 0, nothing)\n'),
+    ('ordered_override_properties(::Type{<:BSImpl.ArrayMaker{T}}) where {T} = (ArgsT{T}(), 0, 0, nothing)\n',
+     'ordered_override_properties(::Type{<:BSImpl.ArrayMaker{T}}) where {T} = (ArgsT{T}(), _new_argument_cache_state(), 0, 0, nothing)\n'),
+]:
+    assert text.count(old) == 1
     text = text.replace(old, new)
+
+old = '''        BSImpl.AddMul(; coeff, dict, variant, metadata, shape, type) =>\n            BSImpl.AddMul{T}(get(p, :coeff, coeff), get(p, :dict, dict), get(p, :variant, variant),\n                             get(p, :metadata, metadata), get(p, :shape, shape), get(p, :type, type),\n                             ArgsT{T}(), Z, Z, nothing)\n'''
+new = '''        BSImpl.AddMul(; coeff, dict, variant, metadata, shape, type) =>\n            BSImpl.AddMul{T}(get(p, :coeff, coeff), get(p, :dict, dict), get(p, :variant, variant),\n                             get(p, :metadata, metadata), get(p, :shape, shape), get(p, :type, type),\n                             ArgsT{T}(), _new_argument_cache_state(), Z, Z, nothing)\n'''
+assert text.count(old) == 1
+text = text.replace(old, new)
+
+old = '''        BSImpl.ArrayOp(; output_idx, expr, reduce, term, ranges, metadata, shape, type) =>\n            BSImpl.ArrayOp{T}(get(p, :output_idx, output_idx), get(p, :expr, expr),\n                              get(p, :reduce, reduce), get(p, :term, term), get(p, :ranges, ranges),\n                              get(p, :metadata, metadata), get(p, :shape, shape), get(p, :type, type),\n                              ArgsT{T}(), Z, Z, nothing)\n'''
+new = '''        BSImpl.ArrayOp(; output_idx, expr, reduce, term, ranges, metadata, shape, type) =>\n            BSImpl.ArrayOp{T}(get(p, :output_idx, output_idx), get(p, :expr, expr),\n                              get(p, :reduce, reduce), get(p, :term, term), get(p, :ranges, ranges),\n                              get(p, :metadata, metadata), get(p, :shape, shape), get(p, :type, type),\n                              ArgsT{T}(), _new_argument_cache_state(), Z, Z, nothing)\n'''
+assert text.count(old) == 1
+text = text.replace(old, new)
+
+old = '''        BSImpl.ArrayMaker(; regions, values, metadata, shape, type) =>\n            BSImpl.ArrayMaker{T}(get(p, :regions, regions), get(p, :values, values),\n                                 get(p, :metadata, metadata), get(p, :shape, shape),\n                                 get(p, :type, type), ArgsT{T}(), Z, Z, nothing)\n'''
+new = '''        BSImpl.ArrayMaker(; regions, values, metadata, shape, type) =>\n            BSImpl.ArrayMaker{T}(get(p, :regions, regions), get(p, :values, values),\n                                 get(p, :metadata, metadata), get(p, :shape, shape),\n                                 get(p, :type, type), ArgsT{T}(), _new_argument_cache_state(), Z, Z, nothing)\n'''
+assert text.count(old) == 1
+text = text.replace(old, new)
 
 types.write_text(text)
 
