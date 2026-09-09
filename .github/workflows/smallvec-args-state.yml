@@ -1,0 +1,71 @@
+name: SmallVec args state design
+
+on:
+  push:
+    branches:
+      - prototype/threadsafe-args-smallvec-state
+
+permissions:
+  contents: read
+
+env:
+  JULIA_PKG_PRECOMPILE_AUTO: '0'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SmallVec prototype
+        uses: actions/checkout@v4
+        with:
+          ref: prototype/threadsafe-args-smallvec-state
+          path: state
+      - name: Checkout exact upstream baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c7b36c85ed2b1691bddc3c2d1ca36413ca984e
+          path: master
+      - name: Checkout atomic-wrapper PR head
+        uses: actions/checkout@v4
+        with:
+          ref: cd183ac417986e9403a381500aab2553431a5a39
+          path: wrapper
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+      - name: Apply inline SmallVec state prototype
+        working-directory: state
+        run: python dev/smallvec_args_state.py
+      - name: Resolve dependencies
+        run: |
+          julia --project=master -e 'using Pkg; Pkg.instantiate()'
+          cp master/Manifest.toml wrapper/Manifest.toml
+          cp master/Manifest.toml state/Manifest.toml
+          julia --project=wrapper -e 'using Pkg; Pkg.instantiate()'
+          julia --project=state -e 'using Pkg; Pkg.instantiate()'
+      - name: Verify direct args surface
+        working-directory: state
+        run: |
+          julia --compiled-modules=no --project=. -e '
+            using SymbolicUtils
+            using SymbolicUtils: SymReal, BSImpl, ArgsT
+            using Moshi.Match: @match
+            using TermInterface
+            xs = [SymbolicUtils.Sym{SymReal}(Symbol(:x_, i); type=Real) for i in 1:8]
+            ex = sum(xs)
+            raw = @match ex begin
+              BSImpl.AddMul(; args) => args
+              _ => error("not AddMul")
+            end
+            @assert raw isa ArgsT{SymReal}
+            @assert isempty(raw)
+            arguments(ex)
+            @assert !isempty(raw)
+            @assert raw isa ArgsT{SymReal}
+            println("direct args surface preserved: ", typeof(raw))
+          '
+      - name: Microbench and stress - atomic wrapper
+        run: julia --compiled-modules=no --project=wrapper --threads=8 state/dev/bench_args_cache.jl
+      - name: Microbench and stress - inline SmallVec state
+        run: julia --compiled-modules=no --project=state --threads=8 state/dev/bench_args_cache.jl
