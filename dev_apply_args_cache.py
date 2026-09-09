@@ -130,7 +130,7 @@ end
     expr = fresh_sum(0; nargs = 32)
     first_args = arguments(expr)
     second_args = arguments(expr)
-    @test collect(first_args) == collect(second_args)
+    @test isequal(collect(first_args), collect(second_args))
     @test parent(first_args) === parent(second_args)
 end
 
@@ -166,7 +166,7 @@ end
             go[] = true
             results = fetch.(tasks)
             @test all(length(args) == length(expected) for args in results)
-            @test all(Set(args) == expected for args in results)
+            @test all(isequal(Set(args), expected) for args in results)
         end
     end
 end
