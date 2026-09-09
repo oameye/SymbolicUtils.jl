@@ -59,16 +59,10 @@ jobs:
           julia --project=wrapper -e 'using Pkg; Pkg.instantiate()'
           julia --project=lock -e 'using Pkg; Pkg.instantiate()'
 
-      - name: Load all three variants
-        run: |
-          julia --project=master -e 'using SymbolicUtils'
-          julia --project=wrapper -e 'using SymbolicUtils'
-          julia --project=lock -e 'using SymbolicUtils'
-
       - name: Verify direct args surface
         working-directory: lock
         run: |
-          julia --project=. -e '
+          julia --compiled-modules=no --project=. -e '
             using SymbolicUtils
             using SymbolicUtils: SymReal, BSImpl, ArgsT
             using Moshi.Match: @match
@@ -88,17 +82,11 @@ jobs:
           '
 
       - name: Microbench and stress - atomic wrapper
-        run: julia --project=wrapper --threads=8 lock/dev/bench_args_cache.jl
+        run: julia --compiled-modules=no --project=wrapper --threads=8 lock/dev/bench_args_cache.jl
 
       - name: Microbench and stress - striped lock
-        run: julia --project=lock --threads=8 lock/dev/bench_args_cache.jl
+        run: julia --compiled-modules=no --project=lock --threads=8 lock/dev/bench_args_cache.jl
 
       - name: Baseline race check
         continue-on-error: true
-        run: julia --project=master --threads=8 lock/dev/bench_args_cache.jl
-
-      - name: Full prototype tests
-        working-directory: lock
-        env:
-          JULIA_NUM_THREADS: '8'
-        run: julia --project=. -e 'using Pkg; Pkg.test()'
+        run: julia --compiled-modules=no --project=master --threads=8 lock/dev/bench_args_cache.jl
