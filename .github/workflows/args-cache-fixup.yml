@@ -1,0 +1,37 @@
+name: Validate argument cache review fixups
+
+on:
+  push:
+    branches:
+      - fix/threadsafe-arguments-cache
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+      - name: Apply review fixups
+        run: python dev_fixup_args_cache.py
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Run threaded regression
+        run: julia --project=. --threads=8 test/threadsafe_arguments.jl
+      - name: Verify arguments docstring attachment
+        run: julia --project=. -e 'using SymbolicUtils, TermInterface; @assert Base.Docs.doc(TermInterface.arguments) !== nothing'
+      - name: Commit validated fixups
+        run: |
+          rm -f dev_fixup_args_cache.py .github/workflows/args-cache-fixup.yml
+          git config user.name "Orjan Ameye"
+          git config user.email "orjan.ameye@hotmail.com"
+          git add src/terminterface.jl test/threadsafe_arguments.jl
+          git add -u dev_fixup_args_cache.py .github/workflows/args-cache-fixup.yml
+          git commit -m "test: tighten atomic argument cache regression"
+          git push origin HEAD:fix/threadsafe-arguments-cache
