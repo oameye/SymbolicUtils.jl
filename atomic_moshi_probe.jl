@@ -1,3 +1,4 @@
+using Moshi
 using Moshi.Data: @data
 
 mutable struct AtomicCache{T}
