@@ -11,9 +11,7 @@ jobs:
       - uses: julia-actions/setup-julia@v1
         with:
           version: '1.13'
-      - name: Enable prototype domain methods
-        run: sed -i '/include("methods.jl")/a include("atomic_complex_domains.jl")' src/SymbolicUtils.jl
       - name: Instantiate
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
-      - name: Domain probe
+      - name: Raw domain probe
         run: julia --project=. test/atomic_complex_domains.jl
