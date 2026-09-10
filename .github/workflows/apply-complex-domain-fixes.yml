@@ -1,0 +1,137 @@
+name: Apply final complex domain fixes
+on:
+  push:
+    branches:
+      - prototype/atomic-complex-domain-fixes
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.13'
+      - name: Apply focused source and regression fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('src/polyform.jl')
+          s = p.read_text()
+          old = '''                if ipoly isa PolyVarT
+                    ipoly = MA.operate(*, PolynomialT, ipoly, im)
+                else
+                    ipoly = MA.copy_if_mutable(ipoly)
+                    MA.operate!(*, ipoly, im)
+                end
+                MA.operate!(+, poly, ipoly)
+'''
+          new = '''                # Promote either a polynomial variable or a polynomial into the
+                # package's wide `PolynomialT` coefficient storage before multiplying by
+                # the literal Julia `im`. This avoids specializing the polynomial on a
+                # concrete Complex coefficient type.
+                ipoly_wide = zeropoly()
+                MA.operate!(+, ipoly_wide, ipoly)
+                MA.operate!(*, ipoly_wide, im)
+                MA.operate!(+, poly, ipoly_wide)
+'''
+          assert old in s
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('src/simplify_rules.jl')
+          s = p.read_text()
+          marker = 'const ASSORTED_RULES = (\n'
+          helper = '''# Cartesian projection is an explicit simplification operation, not a
+# representation choice. Keep opaque complex leaves atomic, but distribute real/imag
+# through sums and products when the user asks the simplifier to expose those parts.
+_is_add_or_mul(x) = iscall(x) && (operation(x) === (+) || operation(x) === (*))
+
+function _cartesian_parts(x)
+    symtype(x) <: Real && return (x, 0)
+    if !iscall(x)
+        return real(x), imag(x)
+    end
+    op = operation(x)
+    if op === (+)
+        re = 0
+        im_part = 0
+        for a in arguments(x)
+            ar, ai = _cartesian_parts(a)
+            re = re + ar
+            im_part = im_part + ai
+        end
+        return re, im_part
+    elseif op === (*)
+        re = 1
+        im_part = 0
+        for a in arguments(x)
+            ar, ai = _cartesian_parts(a)
+            old_re = re
+            old_im = im_part
+            re = old_re * ar - old_im * ai
+            im_part = old_re * ai + old_im * ar
+        end
+        return re, im_part
+    else
+        return real(x), imag(x)
+    end
+end
+
+'''
+          assert helper not in s
+          assert marker in s
+          s = s.replace(marker, helper + marker, 1)
+          old_rules = '''    @rule(conj(~x::_isreal) => ~x),
+    @rule(real(~x::_isreal) => ~x),
+    @rule(imag(~x::_isreal) => zero(symtype(~x))),
+'''
+          new_rules = '''    @rule(conj(~x::_isreal) => ~x),
+    @rule(real(~x::_isreal) => ~x),
+    @rule(imag(~x::_isreal) => zero(symtype(~x))),
+    @rule(real(~x::_is_add_or_mul) => first(_cartesian_parts(~x))),
+    @rule(imag(~x::_is_add_or_mul) => last(_cartesian_parts(~x))),
+'''
+          assert old_rules in s
+          p.write_text(s.replace(old_rules, new_rules, 1))
+
+          p = Path('test/atomic_complex_domains.jl')
+          s = p.read_text()
+          insert = '''
+    @testset "complex projection simplification (#832)" begin
+        @syms r1::Real r2::Real i1::Real i2::Real z1::Complex{Real} z2::Complex{Real}
+        x1 = r1 + i1 * im
+        x2 = r2 + i2 * im
+        @test _iszero(simplify(real(x1 * x2) - (r1 * r2 - i1 * i2); expand = true))
+        @test _iszero(simplify(imag(x1 * x2) - (r1 * i2 + i1 * r2); expand = true))
+
+        reprod = simplify(real(z1 * z2))
+        improd = simplify(imag(z1 * z2))
+        @test _iszero(simplify(reprod - (real(z1) * real(z2) - imag(z1) * imag(z2)); expand = true))
+        @test _iszero(simplify(improd - (real(z1) * imag(z2) + imag(z1) * real(z2)); expand = true))
+
+        opaque = simplify(real(exp(z1)))
+        @test iscall(opaque)
+        @test operation(opaque) === real
+    end
+'''
+          endmarker = '\nend\n'
+          idx = s.rfind(endmarker)
+          assert idx >= 0
+          p.write_text(s[:idx] + insert + s[idx:])
+      - name: Validate focused complex semantics
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. test/atomic_complex_domains.jl
+      - name: Commit checked-in implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/apply-complex-domain-fixes.yml
+          git add src/polyform.jl src/simplify_rules.jl test/atomic_complex_domains.jl
+          git commit -m 'fix: normalize complex projections and Cartesian polyform'
+          git push origin HEAD:prototype/atomic-complex-domain-fixes
