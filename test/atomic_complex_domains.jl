@@ -70,4 +70,21 @@ using SymbolicUtils
         diff = simplify(c - (x + im * y); expand = true)
         @test SymbolicUtils._iszero(diff)
     end
+
+    @testset "complex projection simplification (#832)" begin
+        @syms r1::Real r2::Real i1::Real i2::Real z1::Complex{Real} z2::Complex{Real}
+        x1 = r1 + i1 * im
+        x2 = r2 + i2 * im
+        @test SymbolicUtils._iszero(simplify(real(x1 * x2) - (r1 * r2 - i1 * i2); expand = true))
+        @test SymbolicUtils._iszero(simplify(imag(x1 * x2) - (r1 * i2 + i1 * r2); expand = true))
+
+        reprod = simplify(real(z1 * z2))
+        improd = simplify(imag(z1 * z2))
+        @test SymbolicUtils._iszero(simplify(reprod - (real(z1) * real(z2) - imag(z1) * imag(z2)); expand = true))
+        @test SymbolicUtils._iszero(simplify(improd - (real(z1) * imag(z2) + imag(z1) * real(z2)); expand = true))
+
+        opaque = simplify(real(exp(z1)))
+        @test iscall(opaque)
+        @test operation(opaque) === real
+    end
 end
