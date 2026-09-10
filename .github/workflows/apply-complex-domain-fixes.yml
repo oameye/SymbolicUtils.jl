@@ -7,7 +7,6 @@ permissions:
   contents: write
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -17,8 +16,9 @@ jobs:
         with:
           version: '1.13'
       - name: Apply focused source and regression fixes
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           p = Path('src/polyform.jl')
@@ -123,6 +123,7 @@ end
           idx = s.rfind(endmarker)
           assert idx >= 0
           p.write_text(s[:idx] + insert + s[idx:])
+          PY
       - name: Validate focused complex semantics
         run: |
           julia --project=. -e 'using Pkg; Pkg.instantiate()'
