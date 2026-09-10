@@ -2,7 +2,7 @@ using Test
 using SymbolicUtils
 
 @testset "atomic complex domain semantics" begin
-    @syms x::Real z::Complex n::Number
+    @syms x::Real z::Complex{Real} n::Number
 
     @test conj(x) === x
     @test real(x) === x
@@ -27,5 +27,5 @@ using SymbolicUtils
     @test operation(sqrt(z)) === sqrt
 
     @test operation(exp(im * x)) === exp
-    @test search_variables(exp(im * x)) == Set([x]) || Set(search_variables(exp(im * x))) == Set([x])
+    @test Set(search_variables(exp(im * x))) == Set([x])
 end
