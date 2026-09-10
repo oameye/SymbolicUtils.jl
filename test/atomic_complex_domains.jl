@@ -2,7 +2,7 @@ using Test
 using SymbolicUtils
 
 @testset "raw atomic complex domain semantics" begin
-    @syms x::Real z::Complex{Real} n::Number m::Number
+    @syms x::Real y::Real z::Complex{Real} n::Number m::Number
 
     @test conj(x) === x
     @test real(x) === x
@@ -55,5 +55,19 @@ using SymbolicUtils
             @test SymbolicUtils.symtype(abs(v)) <: Real
             @test SymbolicUtils.symtype(abs2(v)) <: Real
         end
+    end
+
+    @testset "explicit Cartesian complex terms" begin
+        @test SymbolicUtils.promote_shape(complex, SymbolicUtils.ShapeVecT(), SymbolicUtils.ShapeVecT()) == SymbolicUtils.ShapeVecT()
+        @test_throws ArgumentError SymbolicUtils.promote_shape(complex, SymbolicUtils.ShapeVecT((1:2,)), SymbolicUtils.ShapeVecT())
+
+        c = SymbolicUtils.term(complex, x, y; type = Complex{Real})
+        @test SymbolicUtils.symtype(c) == Complex{Real}
+        @test SymbolicUtils.shape(c) == SymbolicUtils.ShapeVecT()
+
+        # Regression for SymbolicUtils #921: explicit complex(re, im) must participate
+        # algebraically in polynomial expansion rather than becoming an opaque PolyVar.
+        diff = simplify(c - (x + im * y); expand = true)
+        @test SymbolicUtils._iszero(diff)
     end
 end
