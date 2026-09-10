@@ -503,12 +503,17 @@ end
 
 for f in [real, imag]
     @eval function promote_symtype(::$(typeof(f)), T::TypeT)
-        if T <: Complex
+        if T === Number
+            return Real
+        elseif T <: Complex
             return T.parameters[1]::TypeT
         else
             return T
         end
     end
+end
+for f in [abs, abs2]
+    @eval promote_symtype(::$(typeof(f)), ::TypeT) = Real
 end
 for f in [real, imag, conj]
     @eval function promote_shape(::typeof($f), sh::ShapeT)
