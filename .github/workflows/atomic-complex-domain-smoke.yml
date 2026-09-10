@@ -19,3 +19,4 @@ jobs:
         run: julia --project=. test/atomic_complex_domains.jl
       - name: Full SymbolicUtils tests
         run: julia --project=. -e 'using Pkg; Pkg.test()'
+# This workflow validates the checked-in source only; it never modifies the branch.
