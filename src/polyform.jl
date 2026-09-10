@@ -113,7 +113,16 @@ function to_poly!(poly_to_bs::AbstractDict, bs_to_poly::AbstractDict, expr::Basi
                 # without relaxing the constructor's real-component contract.
                 rpoly = to_poly!(poly_to_bs, bs_to_poly, args[1], recurse)
                 ipoly = to_poly!(poly_to_bs, bs_to_poly, args[2], recurse)
-                return rpoly + im * ipoly
+                poly = zeropoly()
+                MA.operate!(+, poly, rpoly)
+                if ipoly isa PolyVarT
+                    ipoly = MA.operate(*, PolynomialT, ipoly, im)
+                else
+                    ipoly = MA.copy_if_mutable(ipoly)
+                    MA.operate!(*, ipoly, im)
+                end
+                MA.operate!(+, poly, ipoly)
+                return poly
             elseif f === (^) && isconst(args[2]) && (exp = unwrap_const(args[2]); exp isa Real) && safe_isinteger(exp)
                 base = args[1]
                 poly = to_poly!(poly_to_bs, bs_to_poly, base)
