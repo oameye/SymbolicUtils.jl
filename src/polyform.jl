@@ -27,7 +27,7 @@ Convert polynomial terms back into `BasicSymbolic` expressions by substitution.
 
 # Arguments
 - `poly`: A polynomial expression, either `PolyVarT` or `PolynomialT`
-- `vars`: Vector of `BasicSymbolic` variables corresponding to each entry of
+- `vars`: Vector of `BasicSymbolic{T}` variables corresponding to each entry of
   `MultivariatePolynomials.variables(poly)`.
 
 # Returns
@@ -115,13 +115,14 @@ function to_poly!(poly_to_bs::AbstractDict, bs_to_poly::AbstractDict, expr::Basi
                 ipoly = to_poly!(poly_to_bs, bs_to_poly, args[2], recurse)
                 poly = zeropoly()
                 MA.operate!(+, poly, rpoly)
-                if ipoly isa PolyVarT
-                    ipoly = MA.operate(*, PolynomialT, ipoly, im)
-                else
-                    ipoly = MA.copy_if_mutable(ipoly)
-                    MA.operate!(*, ipoly, im)
-                end
-                MA.operate!(+, poly, ipoly)
+                # Promote either a polynomial variable or a polynomial into the
+                # package's wide `PolynomialT` coefficient storage before multiplying by
+                # the literal Julia `im`. This avoids specializing the polynomial on a
+                # concrete Complex coefficient type.
+                ipoly_wide = zeropoly()
+                MA.operate!(+, ipoly_wide, ipoly)
+                MA.operate!(*, ipoly_wide, im)
+                MA.operate!(+, poly, ipoly_wide)
                 return poly
             elseif f === (^) && isconst(args[2]) && (exp = unwrap_const(args[2]); exp isa Real) && safe_isinteger(exp)
                 base = args[1]
