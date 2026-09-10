@@ -106,7 +106,15 @@ function to_poly!(poly_to_bs::AbstractDict, bs_to_poly::AbstractDict, expr::Basi
             end
         end
         BSImpl.Term(; f, args, type, shape) => begin
-            if f === (^) && isconst(args[2]) && (exp = unwrap_const(args[2]); exp isa Real) && safe_isinteger(exp)
+            if f === complex && length(args) == 2
+                # `complex(re, im)` is an explicit Cartesian scalar constructor. For
+                # polynomial canonicalization it is algebraically equivalent to
+                # `re + im * im_part`; lowering it here lets equivalent forms cancel
+                # without relaxing the constructor's real-component contract.
+                rpoly = to_poly!(poly_to_bs, bs_to_poly, args[1], recurse)
+                ipoly = to_poly!(poly_to_bs, bs_to_poly, args[2], recurse)
+                return rpoly + im * ipoly
+            elseif f === (^) && isconst(args[2]) && (exp = unwrap_const(args[2]); exp isa Real) && safe_isinteger(exp)
                 base = args[1]
                 poly = to_poly!(poly_to_bs, bs_to_poly, base)
                 if poly isa PolyVarT
