@@ -1,0 +1,74 @@
+name: Apply explicit Cartesian complex normalization
+on:
+  push:
+    branches:
+      - prototype/atomic-complex-domain-fixes
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Add scalar shape and polynomial lowering for complex(re, im)
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          methods = Path('src/methods.jl')
+          s = methods.read_text()
+          anchor = '''for f in [real, imag, conj]
+              @eval function promote_shape(::typeof($f), sh::ShapeT)
+                  @nospecialize sh
+                  return sh
+              end
+          end
+          '''
+          addition = '''function promote_shape(::typeof(complex), @nospecialize(shs::ShapeT...))
+              for sh in shs
+                  is_array_shape(sh) && _throw_array(complex, shs...)
+              end
+              return ShapeVecT()
+          end
+          '''
+          if addition not in s:
+              if anchor not in s:
+                  raise SystemExit('shape anchor not found')
+              s = s.replace(anchor, anchor + addition, 1)
+          methods.write_text(s)
+
+          poly = Path('src/polyform.jl')
+          p = poly.read_text()
+          anchor = '''        BSImpl.Term(; f, args, type, shape) => begin
+              if f === (^) && isconst(args[2]) && (exp = unwrap_const(args[2]); exp isa Real) && safe_isinteger(exp)
+          '''
+          replacement = '''        BSImpl.Term(; f, args, type, shape) => begin
+              if f === complex && length(args) == 2
+                  # `complex(re, im)` is an explicit Cartesian scalar with real-valued
+                  # components. Polynomial expansion may lower it algebraically to
+                  # `re + im*impart` so equivalent forms canonicalize together.
+                  rpoly = to_poly!(poly_to_bs, bs_to_poly, args[1], recurse)
+                  ipoly = to_poly!(poly_to_bs, bs_to_poly, args[2], recurse)
+                  result = zeropoly()
+                  MA.operate!(+, result, rpoly)
+                  MA.operate!(+, result, im * ipoly)
+                  return result
+              elseif f === (^) && isconst(args[2]) && (exp = unwrap_const(args[2]); exp isa Real) && safe_isinteger(exp)
+          '''
+          if anchor in p:
+              p = p.replace(anchor, replacement, 1)
+          elif replacement not in p:
+              raise SystemExit('polyform Term anchor not found')
+          poly.write_text(p)
+          PY
+          if git diff --quiet -- src/methods.jl src/polyform.jl; then
+            echo 'Already applied'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/methods.jl src/polyform.jl
+          git commit -m 'fix: normalize explicit Cartesian complex terms'
+          git push
