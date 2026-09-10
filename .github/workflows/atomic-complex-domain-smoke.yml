@@ -1,0 +1,19 @@
+name: Atomic complex domain smoke
+on:
+  push:
+    branches:
+      - prototype/atomic-complex-domain-fixes
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.13'
+      - name: Enable prototype domain methods
+        run: sed -i '/include("methods.jl")/a include("atomic_complex_domains.jl")' src/SymbolicUtils.jl
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Domain probe
+        run: julia --project=. test/atomic_complex_domains.jl
