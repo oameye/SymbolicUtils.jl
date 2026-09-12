@@ -1,0 +1,118 @@
+name: Materialize exact-width fix
+
+on:
+  push:
+    branches:
+      - audit/exact-width-materialize
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Build clean production commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout -B audit/exact-width-result ef5dedc13b48f0cb64ec4442d127e884571d05e8
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/polyform.jl')
+          s = p.read_text()
+          old_lines = [
+              '    # Always widen integer/rational coefficients to Int64 / Rational{Int64}.',
+              '    # On 32-bit Julia, `Int` is Int32; homogeneous `Integer.(::Vector{Int32})`',
+              '    # stays Int32 and then `MP.gcd` / `div_multiple` hits DivideError when',
+              '    # content arithmetic overflows (e.g. MomentClosure derivative matching',
+              '    # closures going through `simplify` → `simplify_fractions`).',
+              '    cs = if all_int',
+              '        Int64.(MP.coefficients(p))',
+              '    elseif all_rat',
+              '        map(c -> begin',
+              '                r = c isa Rational ? c : rationalize(c)',
+              '                Rational{Int64}(Int64(numerator(r)), Int64(denominator(r)))',
+              '            end, MP.coefficients(p))',
+              '    elseif any_complex',
+              '        (complex ∘ float).(MP.coefficients(p))',
+              '    else',
+              '        float.(MP.coefficients(p))',
+              '    end',
+          ]
+          new_lines = [
+              '    coeffs = MP.coefficients(p)',
+              '    exact_int_type = Int64',
+              '    if all_int || all_rat',
+              '        for c in coeffs',
+              '            r = c isa Rational ? c : rationalize(c)',
+              '            exact_int_type = promote_type(exact_int_type, typeof(numerator(r)),',
+              '                                          typeof(denominator(r)))',
+              '        end',
+              '    end',
+              '    # Widen machine integers to at least Int64 for 32-bit safety, but preserve',
+              '    # wider exact domains such as BigInt instead of narrowing them.',
+              '    cs = if all_int',
+              '        exact_int_type.(coeffs)',
+              '    elseif all_rat',
+              '        map(c -> begin',
+              '                r = c isa Rational ? c : rationalize(c)',
+              '                exact_int_type(numerator(r)) // exact_int_type(denominator(r))',
+              '            end, coeffs)',
+              '    elseif any_complex',
+              '        (complex ∘ float).(coeffs)',
+              '    else',
+              '        float.(coeffs)',
+              '    end',
+          ]
+          old = '\n'.join(old_lines) + '\n'
+          new = '\n'.join(new_lines) + '\n'
+          assert old in s
+          s = s.replace(old, new, 1)
+          s = s.replace(
+              'T = isempty(cs) ? (all_int ? Int64 : all_rat ? Rational{Int64} :',
+              'T = isempty(cs) ? (all_int ? exact_int_type : all_rat ? Rational{exact_int_type} :',
+              1,
+          )
+          p.write_text(s)
+
+          p = Path('test/polyform.jl')
+          s = p.read_text()
+          anchor = '''        @testset "homogeneous Int32 widens to Int64 (32-bit gcd safety)" begin
+            # On 32-bit Julia, integer literals are Int32; homogeneous
+            # `Integer.(::Vector{Int32})` used to keep Int32 and then
+            # `MP.gcd`/`div_multiple` could DivideError (MomentClosure).
+            p = poly_with_coeffs(Number[Int32(1), Int32(-2), Int32(1)],
+                                  (1 - v) * (1 - v))
+            g = poly_to_gcd_form(p)
+            @test eltype(MP.coefficients(g)) === Int64
+            @test gcd(g, g) isa DP.Polynomial
+        end
+'''
+          addition = anchor + '''
+        @testset "wide exact coefficient types are preserved" begin
+            # The 32-bit safety widening must not narrow exact coefficients that
+            # already require a wider backing integer type. In particular, a
+            # Rational{BigInt} gcd form must remain compatible with the original
+            # wide polynomial used by `simplify_div` / `MP.div_multiple`.
+            p = poly_with_coeffs(
+                Number[big(1) // big(2), big(-3) // big(2)], (1//2 - v)
+            )
+            g = poly_to_gcd_form(p)
+            @test eltype(MP.coefficients(g)) === Rational{BigInt}
+        end
+'''
+          assert anchor in s
+          p.write_text(s.replace(anchor, addition, 1))
+          PY
+          git diff --check
+          git status --short
+          git config user.name 'complex-number audit'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/polyform.jl test/polyform.jl
+          git commit -m 'Preserve wide exact polynomial coefficients'
+          git push origin HEAD:audit/exact-width-result --force
