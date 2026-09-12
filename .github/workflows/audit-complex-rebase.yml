@@ -1,0 +1,31 @@
+name: Audit complex rebase conflicts
+
+on:
+  push:
+    branches:
+      - audit/complex-rebase-4.46.5
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Inspect cherry-pick conflicts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name "audit-bot"
+          git config user.email "audit@example.invalid"
+          git fetch origin review/complex-number-minimal
+          if git cherry-pick 518331aa9d17f57e126953c72b05c2045c1a5567; then
+            echo "CHERRY_PICK_CLEAN=1"
+            git show --stat --oneline HEAD
+          else
+            echo "CHERRY_PICK_CLEAN=0"
+            git status --short
+            git diff --merge -- src/methods.jl src/polyform.jl test/basics.jl || true
+            git diff --name-only --diff-filter=U || true
+            exit 1
+          fi
