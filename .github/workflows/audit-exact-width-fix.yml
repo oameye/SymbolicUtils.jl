@@ -84,7 +84,7 @@ jobs:
             using SymbolicUtils
             import MultivariatePolynomials as MP
             import DynamicPolynomials as DP
-            v = only(DP.@polyvar __WidthAudit__)
+            v = only(DP.@polyvar __WidthAudit__ monomial_order = SymbolicUtils.MonomialOrder)
             p32 = DP.Polynomial(Number[Int32(1), Int32(-2), Int32(1)], MP.monomials((1-v)*(1-v)))
             g32 = SymbolicUtils.poly_to_gcd_form(p32)
             @assert eltype(MP.coefficients(g32)) === Int64
@@ -97,13 +97,13 @@ jobs:
         shell: bash
         run: |
           cd downstream
-          julia --project=. -e 'using Pkg; Pkg.develop(path=".."); Pkg.add("Nemo"); Pkg.instantiate(; allow_autoprecomp=false)'
+          julia --project=. -e 'using Pkg; Pkg.develop(path=".."); Pkg.add(["Nemo", "Groebner"]); Pkg.instantiate(; allow_autoprecomp=false)'
       - name: Reproduce partial fractions and Laplace-sensitive simplification
         shell: bash
         run: |
           cd downstream
           julia --project=. -e '
-            using Symbolics, Nemo
+            using Symbolics, Nemo, Groebner
             @variables x
             ex = (4x^2 - 22x + 7) / ((2x + 3) * (x - 2)^2)
             out = Symbolics.partial_frac_decomposition(ex, x)
