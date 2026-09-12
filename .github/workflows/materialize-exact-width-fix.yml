@@ -82,32 +82,34 @@ jobs:
 
           p = Path('test/polyform.jl')
           s = p.read_text()
-          anchor = '''        @testset "homogeneous Int32 widens to Int64 (32-bit gcd safety)" begin
-            # On 32-bit Julia, integer literals are Int32; homogeneous
-            # `Integer.(::Vector{Int32})` used to keep Int32 and then
-            # `MP.gcd`/`div_multiple` could DivideError (MomentClosure).
-            p = poly_with_coeffs(Number[Int32(1), Int32(-2), Int32(1)],
-                                  (1 - v) * (1 - v))
-            g = poly_to_gcd_form(p)
-            @test eltype(MP.coefficients(g)) === Int64
-            @test gcd(g, g) isa DP.Polynomial
-        end
-'''
-          addition = anchor + '''
-        @testset "wide exact coefficient types are preserved" begin
-            # The 32-bit safety widening must not narrow exact coefficients that
-            # already require a wider backing integer type. In particular, a
-            # Rational{BigInt} gcd form must remain compatible with the original
-            # wide polynomial used by `simplify_div` / `MP.div_multiple`.
-            p = poly_with_coeffs(
-                Number[big(1) // big(2), big(-3) // big(2)], (1//2 - v)
-            )
-            g = poly_to_gcd_form(p)
-            @test eltype(MP.coefficients(g)) === Rational{BigInt}
-        end
-'''
+          anchor_lines = [
+              '        @testset "homogeneous Int32 widens to Int64 (32-bit gcd safety)" begin',
+              '            # On 32-bit Julia, integer literals are Int32; homogeneous',
+              '            # `Integer.(::Vector{Int32})` used to keep Int32 and then',
+              '            # `MP.gcd`/`div_multiple` could DivideError (MomentClosure).',
+              '            p = poly_with_coeffs(Number[Int32(1), Int32(-2), Int32(1)],',
+              '                                  (1 - v) * (1 - v))',
+              '            g = poly_to_gcd_form(p)',
+              '            @test eltype(MP.coefficients(g)) === Int64',
+              '            @test gcd(g, g) isa DP.Polynomial',
+              '        end',
+          ]
+          extra_lines = [
+              '',
+              '        @testset "wide exact coefficient types are preserved" begin',
+              '            # The 32-bit safety widening must not narrow exact coefficients that',
+              '            # already require a wider backing integer type.',
+              '            p = poly_with_coeffs(',
+              '                Number[big(1) // big(2), big(-3) // big(2)], (1//2 - v)',
+              '            )',
+              '            g = poly_to_gcd_form(p)',
+              '            @test eltype(MP.coefficients(g)) === Rational{BigInt}',
+              '        end',
+          ]
+          anchor = '\n'.join(anchor_lines) + '\n'
+          replacement = '\n'.join(anchor_lines + extra_lines) + '\n'
           assert anchor in s
-          p.write_text(s.replace(anchor, addition, 1))
+          p.write_text(s.replace(anchor, replacement, 1))
           PY
           git diff --check
           git status --short
