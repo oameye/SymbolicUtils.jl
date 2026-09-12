@@ -24,25 +24,26 @@ jobs:
           from pathlib import Path
           p = Path('src/polyform.jl')
           s = p.read_text()
-          old = '''    # Always widen integer/rational coefficients to Int64 / Rational{Int64}.
-    # On 32-bit Julia, `Int` is Int32; homogeneous `Integer.(::Vector{Int32})`
-    # stays Int32 and then `MP.gcd` / `div_multiple` hits DivideError when
-    # content arithmetic overflows (e.g. MomentClosure derivative matching
-    # closures going through `simplify` → `simplify_fractions`).
-    cs = if all_int
-        Int64.(MP.coefficients(p))
-    elseif all_rat
-        map(c -> begin
-                r = c isa Rational ? c : rationalize(c)
-                Rational{Int64}(Int64(numerator(r)), Int64(denominator(r)))
-            end, MP.coefficients(p))
-    elseif any_complex
-        (complex ∘ float).(MP.coefficients(p))
-    else
-        float.(MP.coefficients(p))
-    end
-'''
-          lines = [
+          old_lines = [
+              '    # Always widen integer/rational coefficients to Int64 / Rational{Int64}.',
+              '    # On 32-bit Julia, `Int` is Int32; homogeneous `Integer.(::Vector{Int32})`',
+              '    # stays Int32 and then `MP.gcd` / `div_multiple` hits DivideError when',
+              '    # content arithmetic overflows (e.g. MomentClosure derivative matching',
+              '    # closures going through `simplify` → `simplify_fractions`).',
+              '    cs = if all_int',
+              '        Int64.(MP.coefficients(p))',
+              '    elseif all_rat',
+              '        map(c -> begin',
+              '                r = c isa Rational ? c : rationalize(c)',
+              '                Rational{Int64}(Int64(numerator(r)), Int64(denominator(r)))',
+              '            end, MP.coefficients(p))',
+              '    elseif any_complex',
+              '        (complex ∘ float).(MP.coefficients(p))',
+              '    else',
+              '        float.(MP.coefficients(p))',
+              '    end',
+          ]
+          new_lines = [
               '    coeffs = MP.coefficients(p)',
               '    exact_int_type = Int64',
               '    if all_int || all_rat',
@@ -66,7 +67,8 @@ jobs:
               '        float.(coeffs)',
               '    end',
           ]
-          new = '\n'.join(lines) + '\n'
+          old = '\n'.join(old_lines) + '\n'
+          new = '\n'.join(new_lines) + '\n'
           assert old in s
           s = s.replace(old, new, 1)
           s = s.replace('T = isempty(cs) ? (all_int ? Int64 : all_rat ? Rational{Int64} :', 'T = isempty(cs) ? (all_int ? exact_int_type : all_rat ? Rational{exact_int_type} :', 1)
