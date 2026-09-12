@@ -1,0 +1,63 @@
+name: Audit mixed exact gcd coefficients
+
+on:
+  push:
+    branches:
+      - audit/mixed-exact-gcd
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: JuliaSymbolics/Symbolics.jl
+          path: downstream
+      - uses: julia-actions/setup-julia@latest
+        with:
+          version: '1'
+      - name: Instrument simplify_div
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/polyform.jl')
+          s = p.read_text()
+          old = '    factor = safe_gcd(partial_poly1, partial_poly2)\n    if isone(factor)\n'
+          new = '''    factor = safe_gcd(partial_poly1, partial_poly2)
+    c1 = partial_poly1 isa PolynomialT ? MP.coefficients(partial_poly1) : Any[]
+    c2 = partial_poly2 isa PolynomialT ? MP.coefficients(partial_poly2) : Any[]
+    cf = factor isa PolynomialT ? MP.coefficients(factor) : Any[]
+    if any(c -> c isa Rational{BigInt} || c isa BigInt, c1) ||
+       any(c -> c isa Rational{BigInt} || c isa BigInt, c2)
+        println("MIXED_EXACT_P1_TYPE=", typeof(partial_poly1))
+        println("MIXED_EXACT_P1_COEFF_TYPES=", unique(typeof.(c1)))
+        println("MIXED_EXACT_P1_COEFFS=", c1)
+        println("MIXED_EXACT_P2_TYPE=", typeof(partial_poly2))
+        println("MIXED_EXACT_P2_COEFF_TYPES=", unique(typeof.(c2)))
+        println("MIXED_EXACT_P2_COEFFS=", c2)
+        println("MIXED_EXACT_FACTOR_TYPE=", typeof(factor))
+        println("MIXED_EXACT_FACTOR_COEFF_TYPES=", unique(typeof.(cf)))
+        println("MIXED_EXACT_FACTOR_COEFFS=", cf)
+    end
+    if isone(factor)
+'''
+          assert old in s
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Instantiate downstream against local SymbolicUtils
+        shell: bash
+        run: |
+          cd downstream
+          julia --project=. -e 'using Pkg; Pkg.develop(path=".."); Pkg.add("Nemo"); Pkg.instantiate(; allow_autoprecomp=false)'
+      - name: Reproduce partial fraction failure
+        shell: bash
+        run: |
+          cd downstream
+          julia --project=. -e '
+            using Symbolics, Nemo
+            @variables x
+            ex = (4x^2 - 22x + 7) / ((2x + 3) * (x - 2)^2)
+            println(Symbolics.partial_frac_decomposition(ex, x))
+          '
