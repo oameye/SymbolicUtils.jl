@@ -1,0 +1,110 @@
+name: Audit exact coefficient width preservation
+
+on:
+  push:
+    branches:
+      - audit/exact-width-fix
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: JuliaSymbolics/Symbolics.jl
+          path: downstream
+      - uses: julia-actions/setup-julia@latest
+        with:
+          version: '1'
+      - name: Apply candidate exact-width normalization
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/polyform.jl')
+          s = p.read_text()
+          old = '''    # Always widen integer/rational coefficients to Int64 / Rational{Int64}.
+    # On 32-bit Julia, `Int` is Int32; homogeneous `Integer.(::Vector{Int32})`
+    # stays Int32 and then `MP.gcd` / `div_multiple` hits DivideError when
+    # content arithmetic overflows (e.g. MomentClosure derivative matching
+    # closures going through `simplify` → `simplify_fractions`).
+    cs = if all_int
+        Int64.(MP.coefficients(p))
+    elseif all_rat
+        map(c -> begin
+                r = c isa Rational ? c : rationalize(c)
+                Rational{Int64}(Int64(numerator(r)), Int64(denominator(r)))
+            end, MP.coefficients(p))
+    elseif any_complex
+        (complex ∘ float).(MP.coefficients(p))
+    else
+        float.(MP.coefficients(p))
+    end
+'''
+          lines = [
+              '    coeffs = MP.coefficients(p)',
+              '    exact_int_type = Int64',
+              '    if all_int || all_rat',
+              '        for c in coeffs',
+              '            r = c isa Rational ? c : rationalize(c)',
+              '            exact_int_type = promote_type(exact_int_type, typeof(numerator(r)), typeof(denominator(r)))',
+              '        end',
+              '    end',
+              '    # Widen machine integers to at least Int64 for 32-bit safety, but',
+              '    # preserve wider exact domains such as BigInt instead of narrowing them.',
+              '    cs = if all_int',
+              '        exact_int_type.(coeffs)',
+              '    elseif all_rat',
+              '        map(c -> begin',
+              '                r = c isa Rational ? c : rationalize(c)',
+              '                exact_int_type(numerator(r)) // exact_int_type(denominator(r))',
+              '            end, coeffs)',
+              '    elseif any_complex',
+              '        (complex ∘ float).(coeffs)',
+              '    else',
+              '        float.(coeffs)',
+              '    end',
+          ]
+          new = '\n'.join(lines) + '\n'
+          assert old in s
+          s = s.replace(old, new, 1)
+          s = s.replace('T = isempty(cs) ? (all_int ? Int64 : all_rat ? Rational{Int64} :', 'T = isempty(cs) ? (all_int ? exact_int_type : all_rat ? Rational{exact_int_type} :', 1)
+          p.write_text(s)
+          PY
+      - name: Instantiate SymbolicUtils tests
+        shell: bash
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate(; allow_autoprecomp=false)'
+      - name: Check exact-width invariants
+        shell: bash
+        run: |
+          julia --project=. -e '
+            using SymbolicUtils
+            import MultivariatePolynomials as MP
+            import DynamicPolynomials as DP
+            v = only(DP.@polyvar __WidthAudit__)
+            p32 = DP.Polynomial(Number[Int32(1), Int32(-2), Int32(1)], MP.monomials((1-v)*(1-v)))
+            g32 = SymbolicUtils.poly_to_gcd_form(p32)
+            @assert eltype(MP.coefficients(g32)) === Int64
+            pbig = DP.Polynomial(Number[big(1)//big(2), big(-3)//big(2)], MP.monomials(1-v))
+            gbig = SymbolicUtils.poly_to_gcd_form(pbig)
+            @assert eltype(MP.coefficients(gbig)) === Rational{BigInt}
+            println("WIDTH_CHECK_OK")
+          '
+      - name: Instantiate Symbolics against candidate
+        shell: bash
+        run: |
+          cd downstream
+          julia --project=. -e 'using Pkg; Pkg.develop(path=".."); Pkg.add("Nemo"); Pkg.instantiate(; allow_autoprecomp=false)'
+      - name: Reproduce partial fractions and Laplace-sensitive simplification
+        shell: bash
+        run: |
+          cd downstream
+          julia --project=. -e '
+            using Symbolics, Nemo
+            @variables x
+            ex = (4x^2 - 22x + 7) / ((2x + 3) * (x - 2)^2)
+            out = Symbolics.partial_frac_decomposition(ex, x)
+            println("PARTIAL_FRACTION=", out)
+            @assert out !== nothing
+          '
