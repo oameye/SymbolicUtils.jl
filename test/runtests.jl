@@ -22,8 +22,19 @@ if GROUP == "Core"
                 # @safetestset "Precompilation" begin include("precompilation.jl") end
             end
             @safetestset "Basics" begin include("basics.jl") end
+            @safetestset "Complex numeric domains" begin
+                include("atomic_complex_domains.jl")
+            end
             @safetestset "Thread-safe arguments" begin include("threadsafe_arguments.jl") end
             @safetestset "ArrayOp" begin include("arrayop.jl") end
+            @safetestset "Constant array indices" begin include("constant_array_indices.jl") end
+            @safetestset "Array reduction cache" begin include("array_reduction_cache.jl") end
+            @safetestset "Empty stable indices" begin
+                include("empty_stable_indices.jl")
+            end
+            @safetestset "Empty slice shapes" begin
+                include("empty_slice_shapes.jl")
+            end
             @safetestset "ArrayMaker" begin include("arraymaker.jl") end
             @safetestset "Order" begin include("order.jl") end
             @safetestset "PolyForm" begin include("polyform.jl") end

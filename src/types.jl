@@ -487,7 +487,10 @@ function shape(x)
         return shape(ux)::ShapeT
     end
 end
-shape(::Colon) = ShapeVecT((1:0,))
+# Empty, so `Colon()` behaves like an index vector, but `===`-distinct from the axis `1:0`
+# of an empty index range: `promote_shape(getindex, ...)` sees only shapes.
+const COLON_AXIS = typemax(Int):(typemax(Int) - 1)
+shape(::Colon) = ShapeVecT((COLON_AXIS,))
 
 function SymbolicIndexingInterface.symbolic_type(x::BasicSymbolic)
     if isconst(x)
@@ -798,7 +801,9 @@ function _name_as_operator(x::BasicSymbolic)
         _ => _name_as_operator(operation(x))
     end
 end
-_name_as_operator(x) = nameof(x)
+_name_as_operator(x::Union{Function, Type, Module}) = nameof(x)
+# Callable structs (e.g. `Mapreducer`, `Fill`) have no `nameof`; use their type name.
+_name_as_operator(x) = nameof(typeof(x))
 
 """
     Base.nameof(s::BasicSymbolic)

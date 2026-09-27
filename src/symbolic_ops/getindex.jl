@@ -58,8 +58,9 @@ function promote_shape(::typeof(getindex), sharr::ShapeT, shidxs::ShapeVecT...)
     result = ShapeVecT()
     for (i, idx) in enumerate(shidxs)
         isempty(idx) && continue
-        idx[1] == 1:0 && sharr isa Unknown && throw_no_unknown_colon()
-        ii = idx[1] == 1:0 ? sharr[i] : 1:length(idx[1])
+        iscolon = idx[1] === COLON_AXIS
+        iscolon && sharr isa Unknown && throw_no_unknown_colon()
+        ii = iscolon ? sharr[i] : 1:length(idx[1])
         push!(result, ii)
         if sharr isa ShapeVecT && length(ii) > length(sharr[i])
             throw_index_larger_than_shape(i, ii, sharr[i])
@@ -276,6 +277,11 @@ function __stable_getindex(arr::BasicSymbolic{T}, sidxs::StableIndex{I}) where {
         end
     end
     @match arr begin
+        BSImpl.Term(; f, args) && if (f === adjoint || f === transpose) && length(args) == 1 &&
+                length(shape(args[1])) == 1 && length(idxs) == 2 && idxs[1] == 1 end => begin
+            element = args[1][idxs[2]]
+            return f(element)
+        end
         BSImpl.Term(; f, args) && if f isa Operator && length(args) == 1 end => begin
             inner = args[1][sidxs]
             return BSImpl.Term{T}(f, ArgsT{T}((inner,)); type = symtype(inner), shape = ShapeVecT())
@@ -347,6 +353,12 @@ function _getindex(::Type{T}, arr::BasicSymbolic{T}, idxs::Union{BasicSymbolic{T
             return Const{T}(reshape(arguments(arr), Tuple(size(arr)))[unwrap_const.(idxs)...])
         end
         BSImpl.Term(; f, args) && if f isa TypeT && f <: CartesianIndex end => return args[idxs...]
+        BSImpl.Term(; f, args) && if (f === adjoint || f === transpose) && length(args) == 1 &&
+                length(shape(args[1])) == 1 && length(idxs) == 2 &&
+                idxs[1] isa Int && idxs[1] == 1 end => begin
+            element = args[1][idxs[2]]
+            return f(element)
+        end
         BSImpl.Term(; f, args) && if f isa Operator && length(args) == 1 end => begin
             inner = args[1][idxs...]
             return BSImpl.Term{T}(f, ArgsT{T}((inner,)); type = symtype(inner), shape = shape(inner))
@@ -367,7 +379,7 @@ function _getindex(::Type{T}, arr::BasicSymbolic{T}, idxs::Union{BasicSymbolic{T
                 idx = idxs[idxs_i]
                 idxs_i += 1
                 # special case when `oldidx` is `Colon()`
-                if length(oldidx_sh) == 1 && oldidx_sh[1] == 1:0
+                if unwrap_const(oldidx) isa Colon
                     push!(newargs, Const{T}(idx))
                 elseif idx isa Colon
                     push!(newargs, oldidx)
@@ -512,6 +524,9 @@ function _getindex(::Type{T}, arr::BasicSymbolic{T}, idxs::Union{BasicSymbolic{T
     end
 end
 function _getindex(::Type{T}, x::AbstractArray, idxs...) where {T}
-    Const{T}(getindex(x, idxs...))
+    if any(idx -> idx isa BasicSymbolic{T}, idxs)
+        return _getindex(T, Const{T}(x), idxs...)
+    end
+    return Const{T}(getindex(x, idxs...))
 end
 Base.getindex(x::BasicSymbolic{T}, i::CartesianIndex) where {T} = x[Tuple(i)...]

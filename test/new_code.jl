@@ -820,6 +820,47 @@ end
     end
 end
 
+@testset "`fill_sarr`" begin
+    @test Code.fill_sarr(Val((3,)), 1.0, 2.0, 3.0) === SVector{3}(1.0, 2.0, 3.0)
+    @test Code.fill_sarr(Val((2, 3)), 1, 2, 3, 4, 5, 6) === SMatrix{2, 3}(1, 2, 3, 4, 5, 6)
+    @test Code.fill_sarr(Val((2, 2, 2)), 1:8...) === SArray{Tuple{2, 2, 2}}(1:8...)
+end
+
+@testset "static array codegen for small arrays" begin
+    @syms a::Real b::Real
+    av = 3.0
+    bv = 2.0
+
+    # Any shape with at most `FILL_ARR_LIMIT` elements uses `fill_sarr` with the default
+    # allocator, including ranks above 2 and dimensions longer than 4.
+    w1 = @makearray w[1:8] begin
+        w[1:8] => Const{SymReal}([a, b, a + b, a - b, 2a, 2b, a * b, a / b])
+    end
+    w2 = @makearray w[1:5, 1:3] begin
+        w[1:5, 1:3] => Const{SymReal}([a b a; b a b; a b a; b a b; a b a])
+    end
+    w3 = @makearray w[1:2, 1:2, 1:2] begin
+        w[1:2, 1:2, 1:2] => Const{SymReal}(reshape([a, b, a + b, a - b, 2a, 2b, a * b, a / b], 2, 2, 2))
+    end
+
+    for w in (w1, w2, w3)
+        expr = Code.fast_toexpr(w, Dict{Any, Any}())
+        @test occursin("fill_sarr", string(expr))
+        result = eval(quote
+            let a = $av, b = $bv
+                $expr
+            end
+        end)
+        expected = eval(quote
+            let a = $av, b = $bv
+                $(Code.toexpr(w))
+            end
+        end)
+        @test result isa StaticArray
+        @test result ≈ expected
+    end
+end
+
 @testset "fast_toexpr" begin
     @syms x[1:3] y[1:3] z[1:3]
     w = @makearray w[1:3, 1:3] begin
@@ -1258,4 +1299,69 @@ end
         local var"##cse#6" = $(*)(var"##cse#2", var"##cse#5")
         local var"##cse#7" = $(\)(var"##cse#4", var"##cse#6")
     end)
+end
+
+struct SinMatch <: Code.AbstractMatched
+    idx::Int
+end
+
+function detect_sin(ir::IRStructure, expr)
+    idxs = findall(s -> iscall(s) && operation(s) === sin, ir.symbols)
+    isempty(idxs) ? nothing : map(SinMatch, idxs)
+end
+detect_sin(ir::IRStructure, expr, options) = detect_sin(ir, expr)
+
+replace_sin(ir::IRStructure, expr, matches) = replace_sin(ir, expr, matches, (; f = cos))
+function replace_sin(ir::IRStructure, expr, matches, options)
+    new_ir = copy(ir)
+    for m in matches
+        node = new_ir[m.idx]
+        replace_node!(new_ir, node, term(options.f, only(arguments(node))))
+    end
+    new_ir, expr
+end
+
+@testset "`OptimizationRule` options" begin
+    @syms a::Real
+
+    function evaluate(rule)
+        ir = IRStructure{SymReal}()
+        root = populate_ir!(ir, sin(a))
+        new_ir, _ = Code.apply_optimization_rule(ir, sin(a), rule)
+        expr = Code.fast_toexpr(new_ir[root], new_ir, Dict())
+        eval(quote let a = 0.5; $expr end end)
+    end
+
+    rule = OptimizationRule("ReplaceSin", detect_sin, replace_sin, 1)
+    @test rule.options === nothing
+    @test evaluate(rule) ≈ cos(0.5)
+
+    configured = Code.with_options(rule, (; f = tan))
+    @test configured.options == (; f = tan)
+    @test evaluate(configured) ≈ tan(0.5)
+    @test evaluate(OptimizationRule("ReplaceSin", detect_sin, replace_sin, 1, (; f = exp))) ≈ exp(0.5)
+end
+
+detect_let(expr::Code.Let, state) = map(SinMatch, eachindex(expr.pairs))
+detect_let(expr::Code.Let, state, options) = detect_let(expr, state)
+
+rewrite_let(expr::Code.Let, matches, state) = rewrite_let(expr, matches, state, (; f = cos))
+function rewrite_let(expr::Code.Let, matches, state, options)
+    pairs = map(expr.pairs) do p
+        Code.Assignment(Code.lhs(p), term(options.f, only(arguments(Code.rhs(p)))))
+    end
+    Code.Let(pairs, expr.body, expr.let_block)
+end
+
+@testset "`OptimizationRule` options on the `Code.Let` path" begin
+    @syms a::Real b::Real
+
+    function rewritten(rule)
+        expr = Code.Let([Code.Assignment(b, sin(a))], b, false)
+        operation(Code.rhs(only(Code.apply_optimization_rule(expr, Code.LazyState(), rule).pairs)))
+    end
+
+    rule = OptimizationRule("ReplaceSinInLet", detect_let, rewrite_let, 1)
+    @test rewritten(rule) === cos
+    @test rewritten(Code.with_options(rule, (; f = tan))) === tan
 end

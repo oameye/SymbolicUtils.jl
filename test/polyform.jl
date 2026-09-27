@@ -65,6 +65,10 @@ end
 
     # https://github.com/JuliaSymbolics/Symbolics.jl/issues/968
     @eqtest simplify_fractions((x * y + (1//2) * x) / (2 * x)) == (1//2 + y) / 2
+
+    r = simplify_fractions(x / ((1 + 0im) * x^2 - (2 + 0im) * x + (1 + 0im)))
+    @test unwrap_const(substitute(r, Dict(x => 3))) ≈ 3 // 4
+    @eqtest simplify_fractions(((1 + 0im) * x^2 - (1 + 0im)) / ((1 + 0im) * x - (1 + 0im))) == 1 + x
 end
 
 import DynamicPolynomials as DP
@@ -118,6 +122,13 @@ let v = only(DP.@polyvar __PolyToGcdFormTest__ monomial_order = MonomialOrder)
             T = eltype(MP.coefficients(g))
             @test isconcretetype(T)
             @test T <: Rational
+        end
+
+        @testset "rationals too large for Int64 are not narrowed" begin
+            r = Rational{BigInt}(big(10)^25, 7)
+            g = poly_to_gcd_form(poly_with_coeffs(Number[r, 1], (1 - v)))
+            @test eltype(MP.coefficients(g)) === Rational{BigInt}
+            @test MP.coefficients(g) == [r, 1]
         end
 
         @testset "heterogeneous float kinds (Float32 + Float64)" begin
@@ -181,6 +192,24 @@ end
     @test simplify_fractions((1.0 + 0.5*x - x^2) / ((1//2)*x^2 - 1)) isa Any
 end
 
+@testset "simplify_div with Rational{BigInt} coefficients (#1082)" begin
+    # `to_poly!` keeps whatever concrete coefficient types the expression
+    # carries; `safe_gcd` widens the gcd computation to `Rational{Int64}` via
+    # `poly_to_gcd_form`. `div_multiple` must divide the *converted* partial
+    # polynomials — otherwise it mixes `Rational{BigInt}` and `Rational{Int64}`
+    # inside MutableArithmetics' buffered `sub_mul`, which is unimplemented.
+    @syms x
+    half = big(1) // big(2)
+    # Expanded numerator so `quick_cancel` cannot cancel textually.
+    num = x^2 + (big(3) // big(2)) * x + half
+    den = x + half
+    # Must not throw, and must give the same result as the equivalent
+    # Rational{Int64} coefficient expression.
+    @test isequal(simplify_fractions(num / den),
+                  simplify_fractions((x^2 + (3 // 2) * x + 1 // 2) / (x + 1 // 2)))
+    @test unwrap_const(simplify_fractions(num / num)) == 1
+end
+
 @testset "isone iszero" begin
     @syms a b c d e f g h i
     x = (f + ((((g*(c^2)*(e^2)) / d - e*h*(c^2)) / b + (-c*e*f*g) / d + c*e*i) /
@@ -192,4 +221,52 @@ end
     @test SymbolicUtils.fraction_iszero(x)
     @test !SymbolicUtils.fraction_isone(x)
     @test SymbolicUtils.fraction_isone(o)
+end
+
+@testset "expand with array reductions and callable-struct operations" begin
+    @syms a b x[1:3]
+    s = sum(abs2, x .+ 1)
+    @test isequal(expand(s), s)
+    @test isequal(expand(a * (s + b)), a * s + a * b)
+    @test isequal(expand(s / 3), (1 // 3) * s)
+end
+
+@testset "simplify survives rational coefficients too large for Int64" begin
+    @syms x
+    ex = ((3 + 2x) * (x - (big(10)^25) // 7)^2) / (x + 3 // 2)
+    s = simplify(ex)
+    for v in (3, -5 // 2, big(10)^30)
+        @test unwrap_const(substitute(s, Dict(x => v))) ==
+            unwrap_const(substitute(ex, Dict(x => v)))
+    end
+end
+
+@testset "Rational{Int64} coefficient products that overflow Int64" begin
+    @syms a b
+    big_den = 1_000_000_000_000
+    ex = ((1 // 3) * a + (1 // big_den) * b)^2 / (a + b)
+    @test isequal(simplify(ex), ex)
+    @test isequal(simplify_fractions(ex), ex)
+
+    e = expand(((1 // 3) * a + (1 // big_den) * b)^2)
+    @test isequal(e, (1 // 9) * a^2 + (2 // (3big_den)) * a * b + (1 // big(big_den)^2) * b^2)
+
+    @syms c
+    const_types(ex) = Set(
+        typeof(unwrap_const(x)) for t in arguments(ex)
+            for x in (iscall(t) ? arguments(t) : (t,)) if SymbolicUtils.isconst(x)
+    )
+    mixed = expand((0.5c + (1 // 3) * a + (1 // big_den) * b)^2)
+    @test !any(T -> T <: Union{BigFloat, Complex{BigFloat}}, const_types(mixed))
+    @test Float64 in const_types(mixed)
+    user_big = expand((big(1) / 3 * c + (1 // 3) * a + (1 // big_den) * b)^2)
+    @test BigFloat in const_types(user_big)
+
+    num = expand((a + (1 // big_den) * b)^2 * (a - b))
+    s = simplify_fractions(num / (a + (1 // big_den) * b))
+    @test !occursin("a + (1//1000000000000)*b", repr(s))
+    for (va, vb) in ((2, 3), (-1 // 5, 7), (big(10)^13, 1))
+        @test unwrap_const(substitute(s, Dict(a => va, b => vb))) ==
+            (va + vb // big(big_den)) * (va - vb)
+    end
 end

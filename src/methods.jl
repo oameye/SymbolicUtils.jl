@@ -460,7 +460,7 @@ end
 
 promote_symtype(::Any, T) = promote_type(T, Real)
 for f in monadic
-    if f in [sign, signbit, ceil, floor, factorial, exp]
+    if f in [sign, signbit, ceil, floor, factorial, exp, abs, abs2]
         continue
     end
     @eval function promote_symtype(::$(typeof(f)), T::TypeT)
@@ -503,13 +503,26 @@ end
 
 for f in [real, imag]
     @eval function promote_symtype(::$(typeof(f)), T::TypeT)
-        if T <: Complex
+        if T === Number
+            return Real
+        elseif T <: Complex
             return T.parameters[1]::TypeT
         else
             return T
         end
     end
 end
+for f in [abs, abs2]
+    @eval promote_symtype(::$(typeof(f)), ::TypeT) = Real
+end
+function promote_shape(::typeof(complex), sha::ShapeT, shb::ShapeT)
+    @nospecialize sha shb
+    if is_array_shape(sha) || is_array_shape(shb)
+        _throw_array(complex, sha, shb)
+    end
+    return ShapeVecT()
+end
+
 for f in [real, imag, conj]
     @eval function promote_shape(::typeof($f), sh::ShapeT)
         @nospecialize sh
@@ -947,6 +960,7 @@ Base.eltype(::Type{StableIndices}) = StableIndex{Int}
 Base.keys(x::StableIndices) = Base.OneTo(length(x))
 
 function Base.iterate(x::StableIndices)
+    any(isempty, x.sh) && return nothing
     idx = SmallV{Int}()
     resize!(idx, length(x.sh))
     for i in eachindex(x.sh)
@@ -1339,6 +1353,8 @@ function LinearAlgebra.dot(x::BasicSymbolic{T}, y::AbstractArray) where {T}
     LinearAlgebra.dot(x, Const{T}(y))
 end
 
+promote_symtype(::typeof(LinearAlgebra.mul!), Ts...) = Ts[1]
+
 function promote_symtype(::typeof(LinearAlgebra.det), T::TypeT)
     if T <: Number
         return T
@@ -1674,6 +1690,8 @@ end
 function Base.map(f::BasicSymbolic{T}, x::AbstractArray, y::StaticArraysCore.StaticArray, xs::AbstractArray...) where {T}
     return _map(T, f, x, y, xs...)
 end
+# Resolves the intersection with Base's `map(f, ::ReshapedArray)`.
+Base.map(f::BasicSymbolic{T}, x::Base.ReshapedArray) where {T} = _map(T, f, x)
 # Internal small vectors keep their own eager `map`.
 function Base.map(f::BasicSymbolic, x::SmallVec{T, Vector{T}}) where {T}
     return invoke(map, Tuple{Any, SmallVec{T, Vector{T}}}, f, x)
@@ -1712,13 +1730,13 @@ Callable used as the `operation` of symbolic `mapreduce`-family terms: tracing
 `sum`, `prod`, or `mapreduce(f, reduce, xs...; dims, init)` over symbolic
 arrays produces a term whose operation is a `Mapreducer`. For example `sum(x)`
 of a symbolic array `x` traces to a term with operation
-`Mapreducer(identity, Base.add_sum, Colon(), nothing)`. `dims` is `Colon()` or
-an `Int`, and `init === nothing` means no initial value was supplied. Calling a
-`Mapreducer` applies the corresponding `mapreduce`. Downstream analyses that
+`Mapreducer(identity, Base.add_sum, Colon(), nothing)`. `dims` is `Colon()`, an
+`Int`, or a tuple of `Int`s, and `init === nothing` means no initial value was
+supplied. Calling a `Mapreducer` applies the corresponding `mapreduce`. Downstream analyses that
 walk symbolic expressions can dispatch on this type (and on [`Mapper`](@ref))
 to recognize reductions over symbolic arrays.
 """
-struct Mapreducer{F, R, D <: Union{Int, Colon}, I}
+struct Mapreducer{F, R, D <: Union{Int, Colon, Tuple{Vararg{Int}}}, I}
     f::F
     reduce::R
     dims::D
@@ -1767,8 +1785,11 @@ function promote_shape(f::Mapreducer, shs::ShapeT...)
     else
         # `mapped_shape` may alias an argument's own shape vector; never mutate it.
         reduced_shape = copy(mapped_shape)
-        ax = reduced_shape[f.dims]
-        reduced_shape[f.dims] = first(ax):first(ax)
+        dims = f.dims isa Int ? (f.dims,) : f.dims
+        for d in dims
+            ax = reduced_shape[d]
+            reduced_shape[d] = first(ax):first(ax)
+        end
         return reduced_shape
     end
 end
@@ -1790,6 +1811,13 @@ function _mapreduce(::Type{T}, f, red, xs...; dims = :, init = nothing) where {T
         exp = indexed[1]
     else
         exp = BSImpl.Term{T}(f.f, ArgsT{T}(indexed); type = eltype(type)::TypeT, shape = ShapeVecT())
+    end
+    if !(dims isa Colon)
+        dims = dims isa Int ? (dims,) : dims
+        idxsym = idxs_for_arrayop(T)
+        for d in 1:nd
+            push!(idxs, d in dims ? 1 : idxsym[d])
+        end
     end
     ranges = RangesT{T}()
     if nd == 1 && _map_sh isa ShapeVecT
@@ -1884,9 +1912,12 @@ for T1 in [Real, :(BasicSymbolic{T})], T2 in [AbstractArray, :(BasicSymbolic{T})
     end
 end
 
-function Base.in(a::BasicSymbolic{T}, b::StaticArraysCore.StaticArray) where {T}
-    sh = promote_shape(in, shape(a), shape(b))
-    return BSImpl.Term{T}(in, ArgsT{T}((a, Const{T}(b))); type = Bool, shape = sh)
+# Resolves the intersection with Base's `in(x, ::ReshapedArray)`.
+for S in (StaticArraysCore.StaticArray, Base.ReshapedArray)
+    @eval function Base.in(a::BasicSymbolic{T}, b::$S) where {T}
+        sh = promote_shape(in, shape(a), shape(b))
+        return BSImpl.Term{T}(in, ArgsT{T}((a, Const{T}(b))); type = Bool, shape = sh)
+    end
 end
 
 function promote_symtype(::typeof(issubset), T::TypeT, S::TypeT)
@@ -2103,4 +2134,80 @@ end
 
 function promote_symtype(::typeof(reshape), Tarr::TypeT, Tidxs::TypeT...)
     return Array{safe_eltype(Tarr), length(Tidxs)}
+end
+
+function _extract_perfect_square(x)
+    val = unwrap_const(x)
+    (val isa Integer || val isa Rational) || return nothing
+    val < 0 && return nothing
+    iszero(val) && return 0
+    isone(val) && return 1
+    # sqrt(num//den) == sqrt(num*den)//den
+    num, den = numerator(val), denominator(val)
+    s, r = _split_perfect_square(widemul(num, den))
+    c = _narrow(s // den)
+    r_narrow = _narrow(r)
+    (isone(c) && r_narrow == val) && return nothing
+    isone(r_narrow) && return c
+    radical = term(sqrt, r_narrow)
+    isone(c) ? radical : c * radical
+end
+
+"""
+Only prime factors up to this bound are pulled out of a radicand by
+`_split_perfect_square`, so that a large radicand cannot make its loop
+run away.
+"""
+const PERFECT_SQUARE_TRIAL_LIMIT = 10000
+
+function _primes_up_to(n)
+    sieve = trues(n)
+    sieve[1] = false
+    for i in 2:isqrt(n)
+        if sieve[i]
+            for j in i^2:i:n
+                sieve[j] = false
+            end
+        end
+    end
+    return findall(sieve)
+end
+
+const PRIMES_UP_TO_TRIAL_LIMIT = _primes_up_to(PERFECT_SQUARE_TRIAL_LIMIT)
+
+"""
+    _split_perfect_square(n::Integer)
+
+Write the nonnegative integer `n` as `n == s^2 * r` and return `(s, r)`.
+
+Prime factors are removed by trial division up to
+`PERFECT_SQUARE_TRIAL_LIMIT`, then the remaining cofactor is tested for
+being a perfect square itself. Any pair with `n == s^2*r` is a correct answer; a
+larger `s` only yields a tidier radical, so bounding the search costs exactness
+nothing.
+"""
+function _split_perfect_square(n::Integer)
+    s, r = one(n), n
+    for p in PRIMES_UP_TO_TRIAL_LIMIT
+        p_sq = p * p
+        p_sq > r && break
+        while iszero(mod(r, p_sq))
+            r = r ÷ p_sq
+            s *= p
+        end
+    end
+    q = isqrt(r)
+    if q * q == r
+        s *= q
+        r = one(n)
+    end
+    return (s, r)
+end
+
+# Keep small results out of `BigInt`, so that they print like any other exact
+# coefficient.
+_narrow(n::Integer) = typemin(Int) <= n <= typemax(Int) ? Int(n) : n
+function _narrow(x::Rational)
+    n, d = _narrow(numerator(x)), _narrow(denominator(x))
+    isone(d) ? n : n // d
 end

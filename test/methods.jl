@@ -472,7 +472,7 @@ end
             dense, [1, 2], 1:2, view([1, 2], 1:2), transpose(dense), LinearAlgebra.Symmetric(dense),
             LinearAlgebra.Hermitian(dense), LinearAlgebra.UpperHessenberg(dense),
             SVector(1, 2), [1, 2]', transpose([1, 2]), SparseArrays.spdiagm([1, 2])[:, 1:2],
-            BitVector([true, false]),
+            BitVector([true, false]), reshape(1:4, 2, 2),
         )
         mapped = map(f, arr)
         @test mapped isa BasicSymbolic
@@ -511,6 +511,9 @@ end
     @test isa(result4, BasicSymbolic)
     @test symtype(result4) == Bool
     @test isa(result3, BasicSymbolic)
+    result5 = in(x, reshape(1.0:4.0, 2, 2))
+    @test isa(result5, BasicSymbolic)
+    @test symtype(result5) == Bool
 end
 
 @testset "Symbol conversion" begin
@@ -636,4 +639,45 @@ end
 @testset "`promote_symtype` for `reshape`" begin
     @test SymbolicUtils.promote_symtype(reshape, Vector{Int}, Int, Int) === Matrix{Int}
     @test SymbolicUtils.promote_symtype(reshape, Vector{Real}, Int, Int, Int) === Array{Real, 3}
+end
+
+@testset "`sqrt` simplification rule" begin
+    # exact results stay exact numbers, not symbolic expressions
+    @test SymbolicUtils.unwrap_const(simplify(term(sqrt, 0))) === 0
+    @test SymbolicUtils.unwrap_const(simplify(term(sqrt, 1))) === 1
+    @test SymbolicUtils.unwrap_const(simplify(term(sqrt, 4))) === 2
+    @test SymbolicUtils.unwrap_const(simplify(term(sqrt, 49))) === 7
+    @test SymbolicUtils.unwrap_const(simplify(term(sqrt, 1024))) === 32
+    @test SymbolicUtils.unwrap_const(simplify(term(sqrt, 9 // 4))) === 3 // 2
+
+    # irrational results are unevaluated `sqrt` terms, never floats
+    @test isequal(simplify(term(sqrt, 2)), term(sqrt, 2))
+    @test isequal(simplify(term(sqrt, 3)), term(sqrt, 3))
+
+    # the largest perfect square factor is pulled out of the radicand
+    @test isequal(simplify(term(sqrt, 12)), simplify(2 * term(sqrt, 3)))
+    @test isequal(simplify(term(sqrt, 8)), simplify(2 * term(sqrt, 2)))
+    @test isequal(simplify(term(sqrt, 12 // 49)), simplify((2 // 7) * term(sqrt, 3)))
+    @test isequal(simplify(term(sqrt, 1 // 3)), simplify((1 // 3) * term(sqrt, 3)))
+    @test isequal(simplify(term(sqrt, 7 // 2)), simplify((1 // 2) * term(sqrt, 14)))
+
+    # the value is the square root it claims to be
+    fold(v) = let v = SymbolicUtils.unwrap_const(v)
+        v isa Number ? float(v) :
+        SymbolicUtils.operation(v)(map(fold, SymbolicUtils.arguments(v))...)
+    end
+    for x in (2, 3, 5, 8, 12, 1024, 12 // 49, 1 // 3, 7 // 2, 9 // 4)
+        @test fold(simplify(term(sqrt, x))) ≈ sqrt(float(x))
+    end
+
+    # a radicand whose prime factors all lie beyond the trial division bound is
+    # still correct, and found quickly
+    p = 1_000_003
+    @test SymbolicUtils.unwrap_const(simplify(term(sqrt, big(p)^2))) === p
+    s, r = SymbolicUtils._split_perfect_square(big(p)^2 * 3)
+    @test s^2 * r == big(p)^2 * 3
+
+    # Negative arguments are not simplified by the rule, they stay un-evaluated
+    @test isequal(simplify(term(sqrt, -1)), term(sqrt, -1))
+    @test isequal(simplify(term(sqrt, -1 // 2)), term(sqrt, -1 // 2))
 end
